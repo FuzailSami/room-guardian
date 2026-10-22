@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Room Guardian</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel-2: #1e222b; --line: #2a2f3a;
+    --text: #e8eaf0; --muted: #9aa1b0; --accent: #5b8cff;
+    --person: #ff5d5d; --suspicious: #ffb020; --motion: #7c8597; --snapshot: #5b8cff; --answer: #b083ff;
+    --armed: #3ccf7a; --home: #5b8cff; --snoozed: #ffb020;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f4f5f8; --panel: #ffffff; --panel-2: #f0f2f6; --line: #dfe3ea; --text: #161a22; --muted: #5d6676; }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 88%, transparent);
+           backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+  .bar { max-width: 1100px; margin: 0 auto; padding: 12px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  h1 { font-size: 18px; margin: 0; letter-spacing: .2px; }
+  h1 span { color: var(--muted); font-weight: 500; }
+  .pill { display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px; border-radius: 999px;
+          background: var(--panel-2); border: 1px solid var(--line); font-weight: 600; font-size: 13px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--armed); box-shadow: 0 0 0 4px color-mix(in srgb, var(--armed) 25%, transparent); }
+  .spacer { flex: 1; }
+  button, select, input[type=date] { font: inherit; color: var(--text); background: var(--panel-2);
+          border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; background: var(--panel-2); }
+  .seg button.on { background: var(--accent); color: #fff; font-weight: 600; }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
+  .top { display: grid; grid-template-columns: 1fr 1.3fr; gap: 16px; align-items: start; }
+  @media (max-width: 760px) { .top { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 10px; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .stat { background: var(--panel-2); border-radius: 10px; padding: 10px 12px; }
+  .stat b { display: block; font-size: 26px; line-height: 1.1; }
+  .stat small { color: var(--muted); }
+  .meta { color: var(--muted); font-size: 13px; margin-top: 10px; }
+  .live { position: relative; aspect-ratio: 4/3; background: #000; border-radius: 10px; overflow: hidden; }
+  .live img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .live .off { position: absolute; inset: 0; display: grid; place-items: center; color: #aab; font-size: 14px; }
+  .live .tag { position: absolute; top: 8px; left: 8px; background: #e5383b; color: #fff; font-size: 11px;
+               font-weight: 700; padding: 2px 8px; border-radius: 6px; letter-spacing: .06em; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .chip { border-radius: 999px; padding: 6px 14px; }
+  .chip.on { background: var(--text); color: var(--bg); border-color: var(--text); font-weight: 600; }
+  .day-h { margin: 18px 0 8px; font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+  .ev { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; cursor: pointer;
+        transition: transform .12s ease, border-color .12s ease; border-top: 3px solid var(--k, var(--motion)); }
+  .ev:hover { transform: translateY(-2px); border-color: var(--k, var(--accent)); }
+  .ev .ph { aspect-ratio: 4/3; background: var(--panel-2); display: grid; place-items: center; color: var(--muted); font-size: 13px; }
+  .ev img { width: 100%; aspect-ratio: 4/3; object-fit: cover; display: block; }
+  .ev .body { padding: 10px 12px 12px; }
+  .top-line { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .badge { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--k); }
+  .time { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .desc { margin: 0; font-size: 14px; }
+  .empty { text-align: center; color: var(--muted); padding: 40px 0; }
+  dialog { border: 0; border-radius: 14px; padding: 0; max-width: min(960px, 94vw); background: var(--panel); color: var(--text); }
+  dialog::backdrop { background: rgba(0,0,0,.7); }
+  dialog img { width: 100%; display: block; }
+  dialog .body { padding: 14px 16px; }
+  dialog .close { position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,.6); color: #fff; border: 0; }
+  #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(20px); background: var(--text);
+           color: var(--bg); padding: 10px 16px; border-radius: 10px; font-weight: 600; z-index: 9;
+           opacity: 0; visibility: hidden; transition: opacity .2s ease, transform .2s ease, visibility .2s; }
+  #toast.show { transform: translateX(-50%) translateY(0); opacity: 1; visibility: visible; }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <h1>Room Guardian <span>timeline</span></h1>
+    <span class="pill"><span class="dot" id="dot"></span><span id="mode-text">Loading…</span></span>
+    <div class="spacer"></div>
+    <div class="seg" role="group" aria-label="Presence">
+      <button id="btn-away">Away</button><button id="btn-home">Home</button>
+    </div>
+    <select id="snooze" aria-label="Snooze">
+      <option value="">Snooze…</option><option value="30">30 min</option><option value="60">1 hour</option>
+      <option value="240">4 hours</option><option value="0">Resume alerts</option>
+    </select>
+    <button class="primary" id="btn-snap">📸 Snapshot</button>
+  </div>
+</header>
+
+<main>
+  <section class="top">
+    <div class="card">
+      <h2>Today</h2>
+      <div class="stats">
+        <div class="stat"><b id="s-events">–</b><small>motion events</small></div>
+        <div class="stat"><b id="s-people">–</b><small>people</small></div>
+        <div class="stat"><b id="s-susp">–</b><small>suspicious</small></div>
+      </div>
+      <div class="meta" id="meta">…</div>
+    </div>
+    <div class="card">
+      <h2>Live view</h2>
+      <div class="live">
+        <img id="live-img" alt="Live camera view" hidden>
+        <div class="off" id="live-off">Live view is off</div>
+        <span class="tag" id="live-tag" hidden>LIVE</span>
+      </div>
+      <div class="row"><button id="btn-live">▶ Start live view</button>
+        <span class="meta" style="margin:0">Refreshes about once a second while open</span></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="filters">
+      <button class="chip on" data-f="all">All</button>
+      <button class="chip" data-f="people">People</button>
+      <button class="chip" data-f="suspicious">Suspicious</button>
+      <button class="chip" data-f="alerts">Alerts</button>
+      <div class="spacer"></div>
+      <input type="date" id="day" aria-label="Day">
+      <button id="btn-today">Today</button>
+      <button id="btn-alldays">All days</button>
+    </div>
+    <div id="timeline"></div>
+  </section>
+</main>
+
+<dialog id="dlg">
+  <button class="close" onclick="dlg.close()">✕</button>
+  <img id="dlg-img" alt="">
+  <div class="body"><div class="top-line"><span class="badge" id="dlg-badge"></span><span class="time" id="dlg-time"></span></div>
+    <p class="desc" id="dlg-desc"></p><div class="meta" id="dlg-meta"></div></div>
+</dialog>
+<div id="toast"></div>
+
+<script>
+const KIND = {
+  person:     {label: "Person spotted", color: "var(--person)"},
+  suspicious: {label: "Suspicious",     color: "var(--suspicious)"},
+  motion:     {label: "Motion",         color: "var(--motion)"},
+  snapshot:   {label: "Snapshot",       color: "var(--snapshot)"},
+  answer:     {label: "Question",       color: "var(--answer)"},
+};
+let filter = "all", day = "", liveTimer = null;
+const $ = id => document.getElementById(id);
+
+async function api(path, body) {
+  const opts = body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)};
+  const r = await fetch(path, opts);
+  if (r.status === 401) { document.body.innerHTML = "<p style='padding:24px'>Session expired: open the link with ?key=… again.</p>"; throw new Error("401"); }
+  return r.json();
+}
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 2200); }
+const fmtTime = iso => new Date(iso).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
+const fmtDay = iso => new Date(iso).toLocaleDateString([], {weekday: "long", month: "short", day: "numeric"});
+
+function renderStatus(s) {
+  const snoozed = !!s.snoozed_until;
+  $("mode-text").textContent = snoozed ? `Snoozed until ${s.snoozed_until}` :
+    s.mode === "home" ? "Home · motion ignored" : `Away · armed since ${s.away_since}`;
+  $("dot").style.background = snoozed ? "var(--snoozed)" : s.mode === "home" ? "var(--home)" : "var(--armed)";
+  $("btn-away").classList.toggle("on", s.mode === "away");
+  $("btn-home").classList.toggle("on", s.mode === "home");
+  $("s-events").textContent = s.today.events;
+  $("s-people").textContent = s.today.people;
+  $("s-susp").textContent = s.today.suspicious;
+  $("meta").textContent = [
+    s.last_event ? `Last event ${s.last_event}` : "No events yet today",
+    s.person_detector ? "Person detector on" : "Person detector off",
+    s.queue ? `${s.queue} event(s) being analyzed` : null,
+  ].filter(Boolean).join(" · ");
+}
+
+function card(e) {
+  const k = KIND[e.kind] || KIND.motion;
+  const el = document.createElement("article");
+  el.className = "ev"; el.style.setProperty("--k", k.color);
+  el.innerHTML = e.image ? `<img loading="lazy" alt="">` : `<div class="ph">Photo no longer stored</div>`;
+  if (e.image) el.querySelector("img").src = `/thumbs/${encodeURIComponent(e.image)}`;
+  const body = document.createElement("div"); body.className = "body";
+  body.innerHTML = `<div class="top-line"><span class="badge"></span><span class="time"></span></div><p class="desc"></p>`;
+  body.querySelector(".badge").textContent = k.label;
+  body.querySelector(".time").textContent = fmtTime(e.time);
+  body.querySelector(".desc").textContent = e.description || e.reason || "—";
+  el.appendChild(body);
+  el.onclick = () => openEvent(e);
+  return el;
+}
+
+function openEvent(e) {
+  const k = KIND[e.kind] || KIND.motion;
+  $("dlg-img").src = e.image ? `/photos/${encodeURIComponent(e.image)}` : "";
+  $("dlg-img").hidden = !e.image;
+  $("dlg-badge").textContent = k.label; $("dlg-badge").style.color = k.color;
+  $("dlg-time").textContent = `${fmtDay(e.time)}, ${fmtTime(e.time)}`;
+  $("dlg-desc").textContent = e.description || "—";
+  const conf = e.labels && e.labels.person ? ` · person detector ${Math.round(e.labels.person * 100)}%` : "";
+  $("dlg-meta").textContent = `${e.reason || ""}${conf}`;
+  $("dlg").showModal();
+}
+
+async function loadEvents() {
+  const events = await api(`/api/events?filter=${filter}${day ? `&day=${day}` : ""}`);
+  const tl = $("timeline"); tl.innerHTML = "";
+  if (!events.length) { tl.innerHTML = `<div class="empty">No events ${day ? "on this day" : "yet"} for this filter.</div>`; return; }
+  let currentDay = null, grid = null;
+  for (const e of events) {
+    const d = fmtDay(e.time);
+    if (d !== currentDay) {
+      currentDay = d;
+      const h = document.createElement("div"); h.className = "day-h"; h.textContent = d; tl.appendChild(h);
+      grid = document.createElement("div"); grid.className = "grid"; tl.appendChild(grid);
+    }
+    grid.appendChild(card(e));
+  }
+}
+
+async function refresh() {
+  try { renderStatus(await api("/api/status")); await loadEvents(); } catch (e) { console.warn(e); }
+}
+
+// Controls
+$("btn-away").onclick = async () => { renderStatus(await api("/api/mode", {mode: "away"})); toast("Armed: you're away"); };
+$("btn-home").onclick = async () => { renderStatus(await api("/api/mode", {mode: "home"})); toast("Welcome back: summary sent to your phone"); };
+$("btn-snap").onclick = async () => { await api("/api/snapshot", {}); toast("Snapshot taken: description coming"); setTimeout(refresh, 4000); };
+$("snooze").onchange = async ev => {
+  if (ev.target.value === "") return;
+  const m = Number(ev.target.value);
+  renderStatus(await api("/api/snooze", {minutes: m}));
+  toast(m ? `Alerts snoozed for ${m >= 60 ? m / 60 + " h" : m + " min"}` : "Alerts resumed");
+  ev.target.value = "";
+};
+document.querySelectorAll(".chip").forEach(c => c.onclick = () => {
+  document.querySelectorAll(".chip").forEach(x => x.classList.remove("on"));
+  c.classList.add("on"); filter = c.dataset.f; loadEvents();
+});
+$("day").onchange = e => { day = e.target.value; loadEvents(); };
+$("btn-today").onclick = () => { day = new Date().toLocaleDateString("en-CA"); $("day").value = day; loadEvents(); };
+$("btn-alldays").onclick = () => { day = ""; $("day").value = ""; loadEvents(); };
+
+// Live view
+function setLive(on) {
+  clearInterval(liveTimer); liveTimer = null;
+  $("live-img").hidden = !on; $("live-tag").hidden = !on; $("live-off").hidden = on;
+  $("btn-live").textContent = on ? "■ Stop live view" : "▶ Start live view";
+  if (on) {
+    const tick = () => { $("live-img").src = `/api/live.jpg?t=${Date.now()}`; };
+    tick(); liveTimer = setInterval(tick, 1000);
+  }
+}
+$("btn-live").onclick = () => setLive(!liveTimer);
+document.addEventListener("visibilitychange", () => { if (document.hidden) setLive(false); else refresh(); });
+
+refresh();
+setInterval(() => { if (!document.hidden) refresh(); }, 10000);
+</script>
+</body>
+</html>

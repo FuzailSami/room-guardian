@@ -29,6 +29,7 @@ import os
 import queue
 import re
 import secrets
+import subprocess
 import threading
 import time
 from collections import deque
@@ -128,6 +129,13 @@ HISTORY_PATTERN = re.compile(
     r"since i|how many|did (anyone|someone|anybody|somebody)|has (anyone|someone|anybody|somebody)|"
     r"anything happen|what happened|history|recently|last (time|\d+)|past \d+)\b")
 HISTORY_MAX_EVENTS = 15  # events shown to the LLM
+
+# Web timeline: http://<pi-tailscale-ip>:WEB_PORT/?key=<web_key from config.json>
+# Listens only on the Tailscale address, so only your own devices can reach it.
+WEB_ENABLED = True
+WEB_PORT = 8080
+WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+THUMBS_DIR = os.path.join(EVENTS_DIR, "thumbs")
 DESCRIBE_PROMPT = "Describe this image."  # Moondream garbles longer prompts
 DESCRIPTION_SENTENCES = 1  # keep only the first sentences of the description
 
@@ -163,9 +171,12 @@ def load_topics():
     os.makedirs(EVENTS_DIR, exist_ok=True)
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH) as f:
-            return json.load(f)
-    name = f"fuzail-guardian-{secrets.token_hex(8)}"
-    cfg = {"alert_topic": name, "cmd_topic": f"{name}-cmd"}
+            cfg = json.load(f)
+    else:
+        name = f"fuzail-guardian-{secrets.token_hex(8)}"
+        cfg = {"alert_topic": name, "cmd_topic": f"{name}-cmd"}
+    if "web_key" not in cfg:  # secret for the web timeline
+        cfg["web_key"] = secrets.token_urlsafe(16)
     with open(CONFIG_PATH, "w") as f:
         json.dump(cfg, f, indent=2)
     os.chmod(CONFIG_PATH, 0o600)
@@ -218,6 +229,7 @@ class Watcher:
             camera.start()
             time.sleep(2)  # let exposure settle
         self.cam = camera
+        self.lock = threading.Lock()  # main loop, AI worker and web page all grab frames
         self.avg = None
         self.motion_count = 0
         cascade = next((p for p in CASCADE_PATHS if os.path.exists(p)), None)
@@ -225,7 +237,8 @@ class Watcher:
         self.faces = cv2.CascadeClassifier(cascade) if cascade and hasattr(cv2, "CascadeClassifier") else None
 
     def grab(self):
-        return self.cam.capture_array()
+        with self.lock:
+            return self.cam.capture_array()
 
     def burst(self, first_frame):
         """first_frame plus BURST_FRAMES-1 more, BURST_INTERVAL apart."""
@@ -638,6 +651,9 @@ def log(state: GuardianState):
     photos = sorted(f for f in os.listdir(EVENTS_DIR) if f.endswith(".jpg"))
     for old in photos[:-MAX_IMAGES]:
         os.remove(os.path.join(EVENTS_DIR, old))
+        thumb = os.path.join(THUMBS_DIR, old)
+        if os.path.exists(thumb):
+            os.remove(thumb)
     print(f"[{event['id']}] {event['trigger']}: {(event['description'] or '-')[:80]} "
           f"-> alert={event['alert']} ({event['reason']})", flush=True)
     return {}
@@ -884,6 +900,193 @@ def handle_command(text):
         enqueue(mode="question", trigger="manual", frame=watcher.grab(), question=text)
 
 
+# --- Web timeline ---
+SAFE_IMAGE = re.compile(r"^[\w.-]+\.jpg$")  # only plain event photo names can be served
+
+
+def _local(e):
+    return datetime.fromisoformat(e["timestamp"]).astimezone()
+
+
+def _kind(e):
+    if e.get("mode") == "snapshot":
+        return "snapshot"
+    if e.get("mode") == "question":
+        return "answer"
+    reason = str(e.get("reason", ""))
+    if reason.startswith("Looks suspicious"):
+        return "suspicious"
+    if reason == "Person spotted" or (e.get("labels") or {}).get("person"):
+        return "person"
+    return "motion"
+
+
+def web_events(filter_="all", day=None, limit=200):
+    events = sorted(db_all(), key=lambda e: e["timestamp"])
+    if day:
+        events = [e for e in events if _local(e).strftime("%Y-%m-%d") == day]
+    out = []
+    for e in reversed(events):  # newest first
+        kind = _kind(e)
+        if filter_ == "people" and kind != "person":
+            continue
+        if filter_ == "suspicious" and kind != "suspicious":
+            continue
+        if filter_ == "alerts" and not (e.get("alert") and e.get("mode") == "auto"):
+            continue
+        image = e.get("image", "")
+        out.append({
+            "id": e["id"], "time": _local(e).isoformat(), "kind": kind,
+            "reason": e.get("reason", ""), "description": e.get("description", ""),
+            "alert": bool(e.get("alert")), "labels": e.get("labels") or {},
+            "image": image if image and os.path.exists(os.path.join(EVENTS_DIR, image)) else "",
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+def web_status():
+    today = datetime.now().strftime("%Y-%m-%d")
+    events = [e for e in db_all() if _local(e).strftime("%Y-%m-%d") == today]
+    auto = [e for e in events if e.get("mode") == "auto"]
+    snoozed = time.time() < runtime["snooze_until"]
+    return {
+        "mode": runtime["mode"] if PRESENCE_ENABLED else "away",
+        "snoozed_until": datetime.fromtimestamp(runtime["snooze_until"]).strftime("%H:%M") if snoozed else None,
+        "away_since": datetime.fromtimestamp(runtime["away_since"]).strftime("%a %H:%M"),
+        "person_detector": bool(person_detector or detector),
+        "queue": jobs.qsize(),
+        "today": {"events": len(auto),
+                  "people": sum(1 for e in auto if _kind(e) == "person"),
+                  "suspicious": sum(1 for e in auto if _kind(e) == "suspicious")},
+        "last_event": _local(auto[-1]).strftime("%H:%M") if auto else None,
+    }
+
+
+def thumbnail(name):
+    """Small cached copy of an event photo for the timeline grid."""
+    os.makedirs(THUMBS_DIR, exist_ok=True)
+    thumb = os.path.join(THUMBS_DIR, name)
+    if not os.path.exists(thumb):
+        img = cv2.imread(os.path.join(EVENTS_DIR, name))
+        if img is None:
+            return None
+        h, w = img.shape[:2]
+        cv2.imwrite(thumb, cv2.resize(img, (360, int(h * 360 / w))), [cv2.IMWRITE_JPEG_QUALITY, 75])
+    return thumb
+
+
+def make_web_handler(web_key):
+    from http.server import BaseHTTPRequestHandler
+    from urllib.parse import parse_qs, urlparse
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):  # keep the service log clean
+            pass
+
+        def _send(self, code, body, ctype="application/json", extra=None):
+            if isinstance(body, (dict, list)):
+                body = json.dumps(body).encode()
+            elif isinstance(body, str):
+                body = body.encode()
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            for k, v in (extra or {}).items():
+                self.send_header(k, v)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _authed(self, query):
+            cookie = self.headers.get("Cookie", "")
+            return f"rg_key={web_key}" in cookie or query.get("key", [""])[0] == web_key
+
+        def _file(self, path, ctype):
+            with open(path, "rb") as f:
+                self._send(200, f.read(), ctype)
+
+        def do_GET(self):
+            url = urlparse(self.path)
+            query = parse_qs(url.query)
+            if not self._authed(query):
+                return self._send(401, "<h3>Room Guardian: add ?key=... from config.json</h3>", "text/html")
+            if url.path == "/" and "key" in query:  # first visit: remember the key, clean the URL
+                return self._send(302, "", "text/plain", {
+                    "Set-Cookie": f"rg_key={web_key}; Max-Age=31536000; HttpOnly; SameSite=Strict; Path=/",
+                    "Location": "/"})
+            if url.path in ("/", "/index.html"):
+                return self._file(os.path.join(WEB_DIR, "index.html"), "text/html; charset=utf-8")
+            if url.path == "/api/status":
+                return self._send(200, web_status())
+            if url.path == "/api/events":
+                return self._send(200, web_events(query.get("filter", ["all"])[0],
+                                                  query.get("day", [None])[0] or None))
+            if url.path == "/api/live.jpg":
+                frame = cv2.resize(watcher.grab(), (960, 720))
+                return self._send(200, cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])[1].tobytes(),
+                                  "image/jpeg")
+            for prefix in ("/photos/", "/thumbs/"):
+                if url.path.startswith(prefix):
+                    name = url.path[len(prefix):]
+                    if not SAFE_IMAGE.match(name):
+                        return self._send(404, {"error": "not found"})
+                    path = os.path.join(EVENTS_DIR, name) if prefix == "/photos/" else thumbnail(name)
+                    if path and os.path.exists(path):
+                        return self._file(path, "image/jpeg")
+                    return self._send(404, {"error": "not found"})
+            self._send(404, {"error": "not found"})
+
+        def do_POST(self):
+            url = urlparse(self.path)
+            if not self._authed(parse_qs(url.query)):
+                return self._send(401, {"error": "unauthorized"})
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except ValueError:
+                body = {}
+            if url.path == "/api/snapshot":
+                handle_command("snapshot")
+                return self._send(200, {"ok": True, "message": "Snapshot queued"})
+            if url.path == "/api/mode":
+                set_home() if body.get("mode") == "home" else set_away()
+                return self._send(200, web_status())
+            if url.path == "/api/snooze":
+                minutes = int(body.get("minutes", 0))
+                runtime["snooze_until"] = time.time() + minutes * 60 if minutes > 0 else 0.0
+                return self._send(200, web_status())
+            self._send(404, {"error": "not found"})
+
+    return Handler
+
+
+def tailscale_ip():
+    try:
+        out = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=5).stdout
+        return out.split()[0] if out.split() else None
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+
+
+def run_web(web_key):
+    """Serve the timeline on the Tailscale address (waits for Tailscale at boot)."""
+    from http.server import ThreadingHTTPServer
+
+    for _ in range(30):
+        host = tailscale_ip()
+        if host:
+            break
+        time.sleep(5)
+    else:
+        print("Web timeline off: no Tailscale address", flush=True)
+        return
+    server = ThreadingHTTPServer((host, WEB_PORT), make_web_handler(web_key))
+    print(f"Web timeline: http://{host}:{WEB_PORT}/?key=<web_key in config.json>", flush=True)
+    server.serve_forever()
+
+
 # --- Main loop ---
 def main():
     global watcher, detector, person_detector, topics
@@ -903,6 +1106,8 @@ def main():
         print("Heartbeat on: you'll be alerted if the guardian goes offline", flush=True)
     else:
         print("Heartbeat off (no healthcheck_url in config.json)", flush=True)
+    if WEB_ENABLED:
+        threading.Thread(target=run_web, args=(topics["web_key"],), daemon=True).start()
     commands = queue.Queue()
     threading.Thread(target=listen_commands, args=(commands,), daemon=True).start()
     send_ntfy("Room guardian is on", "Watching the room. Send 'status' to the command topic anytime.",
