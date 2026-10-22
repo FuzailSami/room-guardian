@@ -47,14 +47,31 @@ BASE_DIR = os.path.expanduser("~/guardian")
 EVENTS_DIR = os.path.join(BASE_DIR, "events")
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 DB_PATH = os.path.join(BASE_DIR, "events.json")
+STATE_PATH = os.path.join(BASE_DIR, "state.json")
+
+# Presence: your phone sends "away" / "home" to the command topic (iOS Shortcuts
+# location automation). While you're home, motion is ignored; snapshots and questions still work.
+PRESENCE_ENABLED = True
 
 FRAME_SIZE = (1280, 960)
-CHECK_FPS = 2
-MOTION_THRESHOLD = 0.02  # fraction of the frame that must change
+CHECK_FPS = 4
+MOTION_THRESHOLD = 0.01  # fraction of the frame that must change
 MOTION_FRAMES = 2  # consecutive motion frames needed (filters noise)
-EVENT_COOLDOWN = 60  # seconds between automatic events
-MIN_ALERT_GAP = 60  # seconds between phone alerts
+EVENT_COOLDOWN = 20  # seconds between automatic events
+MIN_ALERT_GAP = 20  # seconds between phone alerts
 MAX_RECAPTURES = 2
+EVENT_QUEUE_SIZE = 3  # events waiting for AI while the camera keeps watching
+
+# Sharper photos: short-exposure camera mode + a burst, keeping the best frame
+SHORT_EXPOSURE = True
+BURST_FRAMES = 3
+BURST_INTERVAL = 0.25  # seconds between burst frames
+
+# Person detector: YOLO11n as ONNX, run by OpenCV (no PyTorch). Confirms people
+# even when Moondream's description misses them. Skipped if the file is missing.
+PERSON_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "yolo11n.onnx")
+PERSON_CONF = 0.40
+PERSON_INPUT = 640  # model input size (smaller = faster, misses distant people)
 MAX_IMAGES = 500  # oldest event photos are deleted beyond this
 
 # AWS backup: photos to S3; event records go over MQTT -> IoT rule -> DynamoDB.
@@ -100,6 +117,17 @@ FILLER_PATTERNS = [
     re.compile(r"^(a|an) (close-up|closeup|wide|blurry|dark|low-angle) (view|shot|image|photo) of\s+", re.I),
 ]
 NTFY_SERVER = "https://ntfy.sh"
+
+# Offline alert: pings a healthchecks.io URL (set "healthcheck_url" in ~/guardian/config.json).
+# If the pings stop (Pi off, crashed, offline, guardian stopped), healthchecks.io alerts you.
+HEARTBEAT_SECONDS = 20
+
+# Questions about the past ("when did someone last come in?") are answered from the event log
+HISTORY_PATTERN = re.compile(
+    r"\b(when|earlier|yesterday|today|tonight|this (morning|afternoon|evening|week)|while i was|"
+    r"since i|how many|did (anyone|someone|anybody|somebody)|has (anyone|someone|anybody|somebody)|"
+    r"anything happen|what happened|history|recently|last (time|\d+)|past \d+)\b")
+HISTORY_MAX_EVENTS = 15  # events shown to the LLM
 DESCRIBE_PROMPT = "Describe this image."  # Moondream garbles longer prompts
 DESCRIPTION_SENTENCES = 1  # keep only the first sentences of the description
 
@@ -110,15 +138,22 @@ CASCADE_PATHS = [
 ]
 
 llm = ChatOllama(model=AGENT_MODEL, temperature=0, num_thread=2, format="json")
+llm_text = ChatOllama(model=AGENT_MODEL, temperature=0, num_thread=2, num_predict=80)
 
 # Runtime state shared by the graph and the command handler
 runtime = {
     "snooze_until": 0.0,
     "last_alert": 0.0,
     "recent": deque(maxlen=8),  # (local time, description, alerted)
+    "mode": "away",  # away = armed, home = motion ignored
+    "away_since": time.time(),
+    "last_away": None,  # [start, end] of the most recent completed away period
 }
 watcher = None
 detector = None
+person_detector = None
+db_lock = threading.Lock()  # TinyDB is shared by the main loop and the AI worker
+jobs = queue.Queue(maxsize=EVENT_QUEUE_SIZE)
 topics = {}
 
 
@@ -173,6 +208,13 @@ class Watcher:
             # RGB888 in Picamera2 gives BGR order, which is what OpenCV expects
             camera.configure(camera.create_video_configuration(
                 main={"size": FRAME_SIZE, "format": "RGB888"}))
+            if SHORT_EXPOSURE:
+                try:  # shorter exposure + more gain = less motion blur
+                    from libcamera import controls
+
+                    camera.set_controls({"AeExposureMode": controls.AeExposureModeEnum.Short})
+                except Exception as e:
+                    print(f"Short exposure not available ({e})", flush=True)
             camera.start()
             time.sleep(2)  # let exposure settle
         self.cam = camera
@@ -184,6 +226,14 @@ class Watcher:
 
     def grab(self):
         return self.cam.capture_array()
+
+    def burst(self, first_frame):
+        """first_frame plus BURST_FRAMES-1 more, BURST_INTERVAL apart."""
+        frames = [first_frame]
+        for _ in range(BURST_FRAMES - 1):
+            time.sleep(BURST_INTERVAL)
+            frames.append(self.grab())
+        return frames
 
     def reset(self):
         """Make the current scene the new background (e.g. after an event)."""
@@ -216,6 +266,56 @@ class Watcher:
         faces = self.count_faces(frame)
         return {"trigger": "face" if faces else "motion", "faces": faces,
                 "motion": round(motion, 3), "frame": frame}
+
+
+class PersonDetector:
+    """YOLO11n (ONNX) run by OpenCV's DNN module, so no PyTorch is needed."""
+
+    def __init__(self, path):
+        self.net = cv2.dnn.readNetFromONNX(path)
+
+    def detect(self, frame):
+        """Return (number of people, best confidence)."""
+        blob = cv2.dnn.blobFromImage(frame, 1 / 255.0, (PERSON_INPUT, PERSON_INPUT), swapRB=True)
+        self.net.setInput(blob)
+        out = self.net.forward()[0].T  # rows: cx, cy, w, h, then 80 class scores (0 = person)
+        scores = out[:, 4]
+        keep = scores >= PERSON_CONF
+        if not keep.any():
+            return 0, 0.0
+        rects = [[float(cx - w / 2), float(cy - h / 2), float(w), float(h)] for cx, cy, w, h in out[keep, :4]]
+        people = cv2.dnn.NMSBoxes(rects, scores[keep].tolist(), PERSON_CONF, 0.45)
+        return len(people), round(float(scores[keep].max()), 2)
+
+
+def load_person_detector():
+    if not os.path.exists(PERSON_MODEL_PATH):
+        print(f"Person detector off ({PERSON_MODEL_PATH} not found); Moondream decides", flush=True)
+        return None
+    try:
+        model = PersonDetector(PERSON_MODEL_PATH)
+        model.detect(np.zeros((480, 640, 3), np.uint8))  # warm up
+        print("Person detector loaded (YOLO11n ONNX)", flush=True)
+        return model
+    except Exception as e:
+        print(f"Person detector failed to load ({e}); Moondream decides", flush=True)
+        return None
+
+
+def sharpness(frame):
+    gray = cv2.cvtColor(cv2.resize(frame, (640, 480)), cv2.COLOR_BGR2GRAY)
+    return cv2.Laplacian(gray, cv2.CV_64F).var()
+
+
+def pick_best(frames):
+    """Choose the frame that shows a person most clearly, else the sharpest one.
+    Returns (frame, labels) where labels is {"person": confidence} or {}."""
+    scored = []
+    for frame in frames:
+        people, conf = person_detector.detect(frame) if person_detector else (0, 0.0)
+        scored.append((conf, sharpness(frame), frame, people))
+    conf, _, frame, people = max(scored, key=lambda s: (s[0], s[1]))
+    return frame, ({"person": conf} if people else {})
 
 
 def save_frame(frame, name):
@@ -356,6 +456,15 @@ def _what(state):
     return "Face" if state["trigger"] == "face" else "Motion"
 
 
+def _details(state):
+    """Description, plus a note when YOLO saw a person the description doesn't mention."""
+    text = state.get("description", "")
+    conf = (state.get("labels") or {}).get("person")
+    if conf and not PERSON_PATTERN.search(text.lower()):
+        text += f" (Person detector: {conf:.0%} sure someone is in the photo.)"
+    return text
+
+
 def _verdict(state):
     """(title, ntfy tags, priority) for the follow-up notification."""
     reason = state.get("reason", "")
@@ -434,7 +543,7 @@ def assess(state: GuardianState):
         person = None if NEGATED_PATTERN.search(text) else PERSON_PATTERN.search(text)
         if suspicious:
             return {"alert": True, "unsure": False, "reason": f"Looks suspicious ({suspicious.group(0)})"}
-        if state["faces"] > 0 or person:
+        if state["faces"] > 0 or person or (state.get("labels") or {}).get("person"):
             return {"alert": True, "unsure": False, "reason": "Person spotted"}
         return {"alert": False, "unsure": False, "reason": "Nothing important"}
 
@@ -493,11 +602,11 @@ def notify(state: GuardianState):
         title, tags, priority = _verdict(state)
         if (state.get("labels") or state["faces"]) and priority < 5:
             priority = 3  # the photo alert was already loud; don't buzz twice
-        send_ntfy(f"{title} ({_clock()})", state["description"], tags=tags, priority=priority,
+        send_ntfy(f"{title} ({_clock()})", _details(state), tags=tags, priority=priority,
                   buttons=state.get("alert", False))
     else:
         title, tags, priority = _verdict(state)
-        send_ntfy(f"{title} ({_clock()})", state["description"], state["image_path"], tags, priority,
+        send_ntfy(f"{title} ({_clock()})", _details(state), state["image_path"], tags, priority,
                   buttons=state.get("alert", False))
         runtime["last_alert"] = time.time()
     return {"alert": bool(state.get("alert")) or mode != "auto"}
@@ -519,7 +628,8 @@ def log(state: GuardianState):
         "s3_key": f"{S3_PREFIX}/{os.path.basename(state['image_path'])}" if UPLOAD_TO_S3 else "",
         "expires_at": int(time.time()) + RETENTION_DAYS * 86400,  # DynamoDB TTL (epoch seconds)
     }
-    TinyDB(DB_PATH).insert(event)
+    with db_lock:
+        TinyDB(DB_PATH).insert(event)
     if UPLOAD_TO_S3:
         upload_photo(state["image_path"], event["s3_key"])
     publish_mqtt(event)
@@ -552,27 +662,197 @@ def build_graph():
 graph = build_graph()
 
 
-def run_event(mode, trigger, frame=None, faces=0, motion=0.0, question=None):
-    event_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+def run_event(mode, trigger, frame=None, faces=0, motion=0.0, question=None, labels=None):
+    now = datetime.now()
+    event_id = now.strftime("%Y%m%d_%H%M%S_") + f"{now.microsecond // 1000:03d}"
     if frame is None:
         frame = watcher.grab()
     graph.invoke({
         "event_id": event_id, "mode": mode, "trigger": trigger, "faces": faces,
-        "motion": motion, "question": question or "", "attempts": 0,
+        "motion": motion, "question": question or "", "attempts": 0, "labels": labels or {},
         "image_path": save_frame(frame, event_id),
     })
+
+
+def db_all():
+    with db_lock:
+        return TinyDB(DB_PATH).all()
+
+
+def enqueue(**event):
+    """Hand an event to the AI worker so the camera keeps watching meanwhile."""
+    try:
+        jobs.put_nowait(event)
+    except queue.Full:
+        print("AI busy: event dropped (queue full)", flush=True)
+
+
+def ai_worker():
+    while True:
+        event = jobs.get()
+        try:
+            if event.pop("kind", None) == "history":
+                answer_history(event["question"])
+            else:
+                run_event(**event)
+        except Exception as e:
+            print(f"Event failed: {e}", flush=True)
+
+
+# --- Presence (away / home) ---
+def load_state():
+    """Restore away/home mode after a restart."""
+    try:
+        with open(STATE_PATH) as f:
+            saved = json.load(f)
+        runtime["mode"] = saved.get("mode", "away")
+        runtime["away_since"] = saved.get("away_since", time.time())
+        runtime["last_away"] = saved.get("last_away")
+    except (OSError, ValueError):
+        pass
+
+
+def save_state():
+    with open(STATE_PATH, "w") as f:
+        json.dump({"mode": runtime["mode"], "away_since": runtime["away_since"],
+                   "last_away": runtime["last_away"]}, f)
+
+
+def _duration(seconds):
+    hours, minutes = int(seconds // 3600), int(seconds % 3600 // 60)
+    return f"{hours}h {minutes}m" if hours else f"{minutes}m"
+
+
+def away_summary(since):
+    """One-paragraph summary of automatic events since `since` (epoch seconds)."""
+    events = [e for e in db_all()
+              if e.get("mode") == "auto" and datetime.fromisoformat(e["timestamp"]).timestamp() >= since]
+    people = sum(1 for e in events if e.get("reason") == "Person spotted")
+    suspicious = sum(1 for e in events if str(e.get("reason", "")).startswith("Looks suspicious"))
+    away_for = _duration(time.time() - since)
+    if not events:
+        return f"All quiet while you were out ({away_for})."
+    parts = [f"{len(events)} motion event{'s' * (len(events) != 1)}",
+             f"{people} {'person' if people == 1 else 'people'} spotted",
+             f"{suspicious} suspicious" if suspicious else "nothing suspicious"]
+    alerts = [e for e in events if e.get("alert")]
+    last = alerts[-1] if alerts else events[-1]
+    when = datetime.fromisoformat(last["timestamp"]).astimezone().strftime("%H:%M")
+    return (f"While you were out ({away_for}): {', '.join(parts)}. "
+            f"Last: {(last.get('description') or last.get('reason', ''))[:120].rstrip('.')} ({when}).")
+
+
+def set_away():
+    if runtime["mode"] == "away":
+        send_ntfy("Already armed", "Room guardian is already watching.", tags="shield", buttons=False)
+        return
+    runtime["mode"], runtime["away_since"] = "away", time.time()
+    save_state()
+    send_ntfy("Armed - you're away", "I'll alert you if a person passes by or anything looks suspicious.",
+              tags="shield", buttons=False)
+
+
+def set_home():
+    if runtime["mode"] == "home":
+        return
+    since = runtime["away_since"]
+    runtime["mode"] = "home"
+    runtime["last_away"] = [since, time.time()]
+    save_state()
+    send_ntfy("Welcome back", away_summary(since), tags="house", buttons=False)
+
+
+# --- Questions about the past ---
+def is_history_question(text):
+    return bool(HISTORY_PATTERN.search(text.lower()))
+
+
+def history_window(question):
+    """(start, end, label) in epoch seconds for the period a question is about."""
+    q, now = question.lower(), time.time()
+    midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    if m := re.search(r"\b(?:last|past) (\d+) (minute|min|hour|hr|day)s?\b", q):
+        n, unit = int(m.group(1)), m.group(2)
+        seconds = n * {"minute": 60, "min": 60, "hour": 3600, "hr": 3600, "day": 86400}[unit]
+        return now - seconds, now, f"the last {n} {unit if unit in ('minute', 'hour', 'day') else 'hour'}s"
+    if re.search(r"\b(while i was|since i (left|was)|when i was (out|away|gone))", q):
+        if runtime["mode"] == "away":
+            return runtime["away_since"], now, "since you left"
+        if runtime["last_away"]:
+            start, end = runtime["last_away"]
+            return start, end, "while you were out"
+    if "yesterday" in q:
+        return midnight - 86400, midnight, "yesterday"
+    if "this week" in q:
+        return now - 7 * 86400, now, "the last 7 days"
+    if re.search(r"\b(today|tonight|this (morning|afternoon|evening))\b", q):
+        return midnight, now, "today"
+    return now - 86400, now, "the last 24 hours"
+
+
+def answer_history(question):
+    """Answer a question about past events: code finds the facts, Llama phrases them."""
+    start, end, label = history_window(question)
+    events = [e for e in db_all() if e.get("mode") == "auto"
+              and start <= datetime.fromisoformat(e["timestamp"]).timestamp() <= end]
+    people = [e for e in events if e.get("reason") == "Person spotted"]
+    suspicious = [e for e in events if str(e.get("reason", "")).startswith("Looks suspicious")]
+
+    def line(e):
+        when = datetime.fromisoformat(e["timestamp"]).astimezone().strftime("%a %H:%M")
+        return f"- {when}: {e.get('reason') or 'Motion'} - {(e.get('description') or '').rstrip('.')}"
+
+    facts = (f"Period: {label}. Motion events: {len(events)}. People spotted: {len(people)}. "
+             f"Suspicious: {len(suspicious)}.\nEvents (oldest first):\n"
+             + ("\n".join(line(e) for e in events[-HISTORY_MAX_EVENTS:]) or "- none"))
+    # Fallback answer built from facts only (used if the LLM is unavailable)
+    if not events:
+        answer = f"Nothing was recorded {'in ' if label.startswith('the ') else ''}{label}."
+    else:
+        key = (suspicious or people or events)[-1]
+        answer = (f"{label.capitalize()}: {len(events)} event(s), {len(people)} with people, "
+                  f"{len(suspicious)} suspicious. Most recent: {line(key)[2:]}.")
+    if events:
+        try:
+            reply = llm_text.invoke(
+                "You answer questions about a home security camera's event log. Use ONLY the facts "
+                "below; never invent events or times. Answer in 1-2 short sentences.\n\n"
+                f"{facts}\n\nQuestion: {question}\nAnswer:").content.strip()
+            answer = reply or answer
+        except Exception as e:
+            print(f"History LLM failed ({e}); sending the plain summary", flush=True)
+
+    photo = None
+    if events:
+        key = (suspicious or people or events)[-1]
+        path = os.path.join(EVENTS_DIR, key.get("image", ""))
+        photo = path if key.get("image") and os.path.exists(path) else None
+    send_ntfy(f"Answer ({_clock()})", answer, photo, "speech_balloon", 3, buttons=False)
+    print(f"History answer ({label}, {len(events)} events): {answer}", flush=True)
+
+
+def heartbeat(url):
+    """Ping healthchecks.io so it can alert you if the Pi or the guardian goes silent."""
+    while True:
+        try:
+            requests.get(url, timeout=10)
+        except requests.RequestException:
+            pass  # offline: the missing pings are exactly what triggers the alert
+        time.sleep(HEARTBEAT_SECONDS)
 
 
 # --- Phone commands ---
 def status_text():
     today = datetime.now().strftime("%Y%m%d")
-    events = [e for e in TinyDB(DB_PATH).all() if e["id"].startswith(today)]
+    events = [e for e in db_all() if e["id"].startswith(today)]
     alerts = sum(1 for e in events if e["alert"])
     if time.time() < runtime["snooze_until"]:
         state = "Snoozed until " + datetime.fromtimestamp(runtime["snooze_until"]).strftime("%H:%M")
+    elif PRESENCE_ENABLED and runtime["mode"] == "home":
+        state = "Home (motion alerts off)"
     else:
-        state = "Armed"
-    detection = "YOLO" if detector else "Moondream"
+        state = "Away (armed)"
+    detection = "YOLO" if (detector or person_detector) else "Moondream"
     last = f"Last: {(events[-1]['description'] or events[-1]['reason'])[:120]}" if events else "No events yet today."
     return f"{state} ({detection} detection). Today: {len(events)} events, {alerts} alerts. {last}"
 
@@ -581,7 +861,8 @@ def handle_command(text):
     t = text.lower().strip()
     print(f"Command: {text}", flush=True)
     if t in ("snapshot", "photo", "pic", "take another"):
-        run_event("snapshot", "manual")
+        frame, labels = pick_best(watcher.burst(watcher.grab()))
+        enqueue(mode="snapshot", trigger="manual", frame=frame, labels=labels)
     elif t.startswith("snooze"):
         digits = re.findall(r"\d+", t)
         minutes = int(digits[0]) if digits else 60
@@ -591,22 +872,37 @@ def handle_command(text):
     elif t in ("resume", "arm", "unsnooze"):
         runtime["snooze_until"] = 0.0
         send_ntfy("Armed", "Alerts are back on.", tags="shield", buttons=False)
+    elif t in ("away", "leave", "leaving", "left"):
+        set_away()
+    elif t in ("home", "back", "arrived", "im home", "i'm home"):
+        set_home()
     elif t == "status":
         send_ntfy("Status", status_text(), tags="bar_chart", buttons=False)
+    elif is_history_question(text):
+        enqueue(kind="history", question=text)
     else:
-        run_event("question", "manual", question=text)
+        enqueue(mode="question", trigger="manual", frame=watcher.grab(), question=text)
 
 
 # --- Main loop ---
 def main():
-    global watcher, detector, topics
+    global watcher, detector, person_detector, topics
     topics = load_topics()
+    load_state()
+    print(f"Mode: {runtime['mode']}")
     print("Subscribe to these in the ntfy app:")
     print(f"  Alerts:   {topics['alert_topic']}")
     print(f"  Commands: {topics['cmd_topic']}  (send: snapshot, snooze 30, resume, status, or a question)")
 
     detector = load_detector()
+    person_detector = load_person_detector()
     watcher = Watcher()
+    threading.Thread(target=ai_worker, daemon=True).start()
+    if topics.get("healthcheck_url"):
+        threading.Thread(target=heartbeat, args=(topics["healthcheck_url"],), daemon=True).start()
+        print("Heartbeat on: you'll be alerted if the guardian goes offline", flush=True)
+    else:
+        print("Heartbeat off (no healthcheck_url in config.json)", flush=True)
     commands = queue.Queue()
     threading.Thread(target=listen_commands, args=(commands,), daemon=True).start()
     send_ntfy("Room guardian is on", "Watching the room. Send 'status' to the command topic anytime.",
@@ -620,10 +916,16 @@ def main():
                 watcher.reset()
 
             hit = watcher.check()
+            if hit and PRESENCE_ENABLED and runtime["mode"] == "home":
+                watcher.reset()  # you're home: ignore your own movement
+                hit = None
             if hit and time.time() - last_event >= EVENT_COOLDOWN:
                 last_event = time.time()
-                print("Event:", hit["trigger"], round(hit["motion"] * 100), "% of frame, analyzing...", flush=True)
-                run_event("auto", hit["trigger"], hit["frame"], hit["faces"], hit["motion"])
+                frame, labels = pick_best(watcher.burst(hit["frame"]))
+                seen = f", person {labels['person']:.0%}" if labels else ""
+                print(f"Event: {hit['trigger']} {hit['motion'] * 100:.0f}% of frame{seen}, analyzing...", flush=True)
+                enqueue(mode="auto", trigger=hit["trigger"], frame=frame, faces=hit["faces"],
+                        motion=hit["motion"], labels=labels)
                 watcher.reset()  # the current scene becomes the new background
         except Exception as e:
             print(f"Error: {e}", flush=True)
