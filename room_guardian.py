@@ -57,6 +57,14 @@ MIN_ALERT_GAP = 60  # seconds between phone alerts
 MAX_RECAPTURES = 2
 MAX_IMAGES = 500  # oldest event photos are deleted beyond this
 
+# AWS backup: photos to S3; event records go over MQTT -> IoT rule -> DynamoDB.
+# Both are deleted after RETENTION_DAYS (S3 lifecycle rule + DynamoDB TTL on expires_at).
+UPLOAD_TO_S3 = True
+S3_BUCKET = "fuzail-ras-pi-data"
+S3_REGION = "us-east-1"
+S3_PREFIX = "guardian/events"
+RETENTION_DAYS = 30
+
 # 1. Fast alert: send the photo immediately, the description follows
 FAST_ALERT = True
 
@@ -278,6 +286,20 @@ def send_ntfy(title, message, image_path=None, tags="", priority=3, buttons=True
         print(f"ntfy send failed: {e}", flush=True)
 
 
+def upload_photo(path, key):
+    """Upload an event photo to S3 in the background so alerts aren't delayed."""
+    def _upload():
+        try:
+            import boto3
+
+            boto3.client("s3", region_name=S3_REGION).upload_file(
+                path, S3_BUCKET, key, ExtraArgs={"ContentType": "image/jpeg"})
+        except Exception as e:  # no internet / no credentials: photo stays local only
+            print(f"S3 upload failed for {key}: {e}", flush=True)
+
+    threading.Thread(target=_upload, daemon=True).start()
+
+
 def publish_mqtt(event):
     try:
         from mqtt_publish import publish  # same folder as this script
@@ -494,8 +516,12 @@ def log(state: GuardianState):
         "alert": bool(state.get("alert")),
         "reason": state.get("reason", ""),
         "image": os.path.basename(state["image_path"]),
+        "s3_key": f"{S3_PREFIX}/{os.path.basename(state['image_path'])}" if UPLOAD_TO_S3 else "",
+        "expires_at": int(time.time()) + RETENTION_DAYS * 86400,  # DynamoDB TTL (epoch seconds)
     }
     TinyDB(DB_PATH).insert(event)
+    if UPLOAD_TO_S3:
+        upload_photo(state["image_path"], event["s3_key"])
     publish_mqtt(event)
     runtime["recent"].append((_clock(), event["description"][:150] or event["reason"], event["alert"]))
 
