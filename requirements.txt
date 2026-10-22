@@ -1,0 +1,11 @@
+# picamera2 and opencv come from apt: sudo apt install python3-picamera2 python3-opencv opencv-data
+langgraph
+langchain-ollama
+tinydb
+requests
+paho-mqtt
+numpy
+# Optional, only for USE_YOLO = True:
+# ultralytics
+# ncnn
+# opencv-python<5

@@ -1,0 +1,21 @@
+# Runtime data (photos, event log, private ntfy topic names)
+guardian/
+config.json
+events.json
+*.jpg
+*.jpeg
+*.png
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Models
+models/
+*.pt
+*_ncnn_model/
+
+# Backups
+*.bak*
