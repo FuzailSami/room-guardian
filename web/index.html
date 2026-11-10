@@ -9,7 +9,7 @@
     --bg: #0f1115; --panel: #171a21; --panel-2: #1e222b; --line: #2a2f3a;
     --text: #e8eaf0; --muted: #9aa1b0; --accent: #5b8cff;
     --person: #ff5d5d; --suspicious: #ffb020; --motion: #7c8597; --snapshot: #5b8cff; --answer: #b083ff;
-    --armed: #3ccf7a; --home: #5b8cff; --snoozed: #ffb020;
+    --armed: #3ccf7a; --home: #5b8cff; --snoozed: #ffb020; --temp: #ff8a3d;
   }
   @media (prefers-color-scheme: light) {
     :root { --bg: #f4f5f8; --panel: #ffffff; --panel-2: #f0f2f6; --line: #dfe3ea; --text: #161a22; --muted: #5d6676; }
@@ -44,6 +44,12 @@
   .stat b { display: block; font-size: 26px; line-height: 1.1; }
   .stat small { color: var(--muted); }
   .meta { color: var(--muted); font-size: 13px; margin-top: 10px; }
+  .temp { margin-top: 10px; background: var(--panel-2); border-radius: 10px; padding: 10px 12px; }
+  .temp-now { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .temp-now b { font-size: 26px; line-height: 1.1; }
+  .temp-now small { color: var(--muted); }
+  #t-chart { width: 100%; height: 64px; display: block; margin-top: 6px; }
+  .temp-range { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 2px 12px; color: var(--muted); font-size: 12px; }
   .live { position: relative; aspect-ratio: 4/3; background: #000; border-radius: 10px; overflow: hidden; }
   .live img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .live .off { position: absolute; inset: 0; display: grid; place-items: center; color: #aab; font-size: 14px; }
@@ -71,6 +77,30 @@
   dialog img { width: 100%; display: block; }
   dialog .body { padding: 14px 16px; }
   dialog .close { position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,.6); color: #fff; border: 0; }
+  .temp-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+  .seg.small button { padding: 3px 10px; font-size: 12px; white-space: nowrap; }
+  .ask .chat { display: flex; flex-direction: column; gap: 10px; max-height: 420px; overflow-y: auto; margin-bottom: 10px; }
+  .ask .chat:empty { display: none; }
+  .msg { max-width: 85%; padding: 9px 13px; border-radius: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg.q { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+  .msg.a { align-self: flex-start; background: var(--panel-2); border-bottom-left-radius: 4px; }
+  .msg.err { color: var(--person); }
+  .msg .meta { margin-top: 6px; font-size: 12px; }
+  .msg .shot { margin-top: 8px; width: min(320px, 100%); border-radius: 8px; display: block; cursor: pointer; }
+  .rel { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .rel button { padding: 0; border: 2px solid var(--k, var(--line)); border-radius: 8px; overflow: hidden; width: 92px; background: none; }
+  .rel img { width: 100%; aspect-ratio: 4/3; object-fit: cover; display: block; }
+  .rel .noimg { display: grid; place-items: center; aspect-ratio: 4/3; font-size: 11px; color: var(--muted); }
+  .thinking::after { content: ""; display: inline-block; width: 8px; height: 8px; margin-left: 8px; border-radius: 50%;
+                     background: var(--answer); animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .2; } }
+  .sugs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .sug { border-radius: 999px; padding: 5px 12px; font-size: 13px; }
+  .ask-row { display: flex; gap: 8px; }
+  .ask-row input { flex: 1; min-width: 0; font: inherit; color: var(--text); background: var(--panel-2);
+                   border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; }
+  .ask-row input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button:disabled { opacity: .55; cursor: wait; }
   #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(20px); background: var(--text);
            color: var(--bg); padding: 10px 16px; border-radius: 10px; font-weight: 600; z-index: 9;
            opacity: 0; visibility: hidden; transition: opacity .2s ease, transform .2s ease, visibility .2s; }
@@ -103,6 +133,17 @@
         <div class="stat"><b id="s-people">–</b><small>people</small></div>
         <div class="stat"><b id="s-susp">–</b><small>suspicious</small></div>
       </div>
+      <div class="temp">
+        <div class="temp-head">
+          <div class="temp-now"><b id="t-now">–</b><small id="t-sub">No sensor reading</small></div>
+          <div class="seg small" role="group" aria-label="Temperature range">
+            <button class="on" data-h="24">24 h</button><button data-h="168">7 d</button>
+          </div>
+        </div>
+        <svg id="t-chart" viewBox="0 0 300 64" preserveAspectRatio="none" aria-label="Room temperature chart"></svg>
+        <div class="temp-range"><span id="t-min"></span><span id="t-label">last 24 h</span><span id="t-max"></span></div>
+        <div class="temp-range"><span id="t-avg"></span><span id="t-cpu"></span></div>
+      </div>
       <div class="meta" id="meta">…</div>
     </div>
     <div class="card">
@@ -115,6 +156,23 @@
       <div class="row"><button id="btn-live">▶ Start live view</button>
         <span class="meta" style="margin:0">Refreshes about once a second while open</span></div>
     </div>
+  </section>
+
+  <section class="card ask">
+    <h2>Ask Guardian</h2>
+    <div class="chat" id="chat" aria-live="polite"></div>
+    <div class="sugs">
+      <button class="sug">Summarize this week</button>
+      <button class="sug">Anything happen today?</button>
+      <button class="sug">When did someone last come in?</button>
+      <button class="sug">How hot did it get today?</button>
+      <button class="sug">What's in the room right now?</button>
+    </div>
+    <form class="ask-row" id="ask-form">
+      <input id="ask-q" maxlength="300" autocomplete="off" placeholder="Ask about events, temperature, or the room right now…">
+      <button class="primary" id="ask-btn">Ask</button>
+    </form>
+    <div class="meta">Answered on the Pi from the event log, the temperature sensor and the camera. Summaries can take 10–30 s.</div>
   </section>
 
   <section class="card">
@@ -148,7 +206,7 @@ const KIND = {
   snapshot:   {label: "Snapshot",       color: "var(--snapshot)"},
   answer:     {label: "Question",       color: "var(--answer)"},
 };
-let filter = "all", day = "", liveTimer = null;
+let filter = "all", day = "", liveTimer = null, tempHours = 24;
 const $ = id => document.getElementById(id);
 
 async function api(path, body) {
@@ -171,6 +229,11 @@ function renderStatus(s) {
   $("s-events").textContent = s.today.events;
   $("s-people").textContent = s.today.people;
   $("s-susp").textContent = s.today.suspicious;
+  const t = s.temperature;
+  $("t-now").textContent = t ? `${t.f}°F` : "–";
+  $("t-sub").textContent = t ? `${t.c}°C · ${t.humidity}% humidity${t.age_s > 300 ? ` · ${Math.round(t.age_s / 60)} min old` : ""}`
+                             : "No sensor reading";
+  $("t-cpu").textContent = s.cpu_c != null ? `Pi CPU ${cToF(s.cpu_c)}°F (${s.cpu_c}°C)` : "";
   $("meta").textContent = [
     s.last_event ? `Last event ${s.last_event}` : "No events yet today",
     s.person_detector ? "Person detector on" : "Person detector off",
@@ -222,8 +285,83 @@ async function loadEvents() {
   }
 }
 
+const cToF = c => Math.round((c * 9 / 5 + 32) * 10) / 10;
+async function loadTemp() {
+  const pts = (await api(`/api/temperature?hours=${tempHours}`)).sort((a, b) => a.t - b.t);
+  const svg = $("t-chart"), label = tempHours === 24 ? "last 24 h" : "last 7 days";
+  if (pts.length < 2) {
+    svg.innerHTML = ""; $("t-min").textContent = $("t-max").textContent = $("t-avg").textContent = "";
+    $("t-label").textContent = "chart appears after a few readings"; return;
+  }
+  const fs = pts.map(p => cToF(p.c)), lo = Math.min(...fs), hi = Math.max(...fs), span = Math.max(hi - lo, 1);
+  const t0 = pts[0].t, dt = Math.max(pts[pts.length - 1].t - t0, 1);
+  const xs = pts.map(p => 2 + (p.t - t0) / dt * 296), ys = fs.map(f => 58 - (f - lo) / span * 52);
+  const line = xs.map((x, i) => `${x.toFixed(1)},${ys[i].toFixed(1)}`).join(" ");
+  svg.innerHTML =
+    `<polygon points="${xs[0].toFixed(1)},64 ${line} ${xs[xs.length - 1].toFixed(1)},64" fill="var(--temp)" opacity=".15"/>` +
+    `<polyline points="${line}" fill="none" stroke="var(--temp)" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
+  $("t-min").textContent = `low ${lo}°F`; $("t-max").textContent = `high ${hi}°F`; $("t-label").textContent = label;
+  const avg = fs.reduce((a, b) => a + b, 0) / fs.length, hs = pts.map(p => p.h);
+  $("t-avg").textContent = `avg ${avg.toFixed(1)}°F · humidity ${Math.min(...hs)}–${Math.max(...hs)}%`;
+}
+document.querySelectorAll("[data-h]").forEach(b => b.onclick = () => {
+  document.querySelectorAll("[data-h]").forEach(x => x.classList.toggle("on", x === b));
+  tempHours = Number(b.dataset.h); loadTemp();
+});
+
+// Ask Guardian (agent on the Pi)
+function bubble(cls, text) {
+  const el = document.createElement("div"); el.className = `msg ${cls}`; el.textContent = text;
+  $("chat").appendChild(el); $("chat").scrollTop = $("chat").scrollHeight; return el;
+}
+async function ask(question) {
+  question = question.trim();
+  if (!question || $("ask-btn").disabled) return;
+  $("ask-q").value = ""; $("ask-btn").disabled = true;
+  bubble("q", question);
+  const el = bubble("a thinking", "Thinking…"), started = Date.now();
+  const timer = setInterval(() => { el.textContent = `Thinking… ${Math.round((Date.now() - started) / 1000)} s`; }, 1000);
+  try {
+    const r = await fetch("/api/ask", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({question})});
+    const data = await r.json().catch(() => ({error: `Error ${r.status}`}));
+    el.className = "msg a";
+    if (!r.ok || data.error) { el.classList.add("err"); el.textContent = data.error || `Error ${r.status}`; return; }
+    el.textContent = data.answer;
+    if (data.image) {
+      const img = document.createElement("img"); img.className = "shot"; img.alt = "What the camera saw";
+      img.onload = () => { $("chat").scrollTop = $("chat").scrollHeight; };
+      img.src = `/photos/${encodeURIComponent(data.image)}`;
+      img.onclick = () => openEvent({kind: "answer", time: new Date().toISOString(), image: data.image, description: data.answer, reason: question});
+      el.appendChild(img);
+    }
+    if (data.events && data.events.length) {
+      const rel = document.createElement("div"); rel.className = "rel";
+      for (const e of data.events) {
+        const b = document.createElement("button"); b.type = "button";
+        b.style.setProperty("--k", (KIND[e.kind] || KIND.motion).color);
+        b.title = `${fmtDay(e.time)}, ${fmtTime(e.time)}: ${e.description || e.reason}`;
+        b.innerHTML = e.image ? `<img alt="">` : `<span class="noimg">${fmtTime(e.time)}</span>`;
+        if (e.image) b.querySelector("img").src = `/thumbs/${encodeURIComponent(e.image)}`;
+        b.onclick = () => openEvent(e);
+        rel.appendChild(b);
+      }
+      el.appendChild(rel);
+    }
+    const meta = document.createElement("div"); meta.className = "meta";
+    meta.textContent = [data.period, `${data.seconds} s`, data.used_llm ? "Llama 3.2" : data.image ? "Moondream" : "from the log"]
+      .filter(Boolean).join(" · ");
+    el.appendChild(meta);
+  } catch (err) {
+    el.className = "msg a err"; el.textContent = "Couldn't reach the Pi.";
+  } finally {
+    clearInterval(timer); $("ask-btn").disabled = false; $("chat").scrollTop = $("chat").scrollHeight;
+  }
+}
+$("ask-form").onsubmit = ev => { ev.preventDefault(); ask($("ask-q").value); };
+document.querySelectorAll(".sug").forEach(b => b.onclick = () => ask(b.textContent));
+
 async function refresh() {
-  try { renderStatus(await api("/api/status")); await loadEvents(); } catch (e) { console.warn(e); }
+  try { renderStatus(await api("/api/status")); await loadEvents(); await loadTemp(); } catch (e) { console.warn(e); }
 }
 
 // Controls

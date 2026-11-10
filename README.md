@@ -7,6 +7,7 @@ A LangGraph agent on a Raspberry Pi 5 that watches a room with the camera, works
 - **Only loud when it matters.** A person or something suspicious (mask, weapon, smoke, fire, broken glass) gets a loud alert. Anything else arrives quietly as "Nothing important".
 - **Knows when you're home.** An iPhone location automation switches the guardian between *away* (armed) and *home* (your own movement is ignored), and you get a "while you were out" summary when you get back.
 - **Ask it about the past.** *"When did someone last come in?"* or *"Anything happen while I was out?"* are answered from the event log, with the relevant photo attached.
+- **Web dashboard with an "Ask" agent.** A timeline, live view and temperature chart, plus a chat box where a LangGraph agent answers *"Summarize this week"* or *"How hot did it get today?"* from the event log, the temperature log and the camera. Code counts the facts and Llama only phrases them, so it can't invent events.
 - **Two-way phone control** through [ntfy](https://ntfy.sh), with no account needed: **Take another** and **Snooze 1h** buttons, plus text commands.
 - **Offline alert.** A heartbeat to healthchecks.io tells you if the Pi crashes, loses power or goes offline.
 - **Cloud backup with auto-expiry.** Photos go to S3, and event records go over MQTT to AWS IoT Core and then DynamoDB. Both are deleted automatically after 30 days.

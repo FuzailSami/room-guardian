@@ -18,6 +18,9 @@ Phone (ntfy app, no account): alerts arrive with a photo and two buttons, "Take 
 and "Snooze 1h". You can also send text to the command topic:
   snapshot | snooze <minutes> | resume | status | any question ("is my laptop on the desk?")
 
+Web dashboard (Tailscale only): timeline, live view, temperature, and an "Ask" box where an
+agent answers questions ("summarize this week") from the event log, the temperature log and the camera.
+
 Every event is also published over MQTT to fuzail-pi/guardian/event.
 
 Run: python3 room_guardian.py
@@ -32,7 +35,7 @@ import secrets
 import subprocess
 import threading
 import time
-from collections import deque
+from collections import Counter, deque
 from datetime import datetime, timezone
 from typing import TypedDict
 
@@ -83,6 +86,19 @@ S3_REGION = "us-east-1"
 S3_PREFIX = "guardian/events"
 RETENTION_DAYS = 30
 
+# Temperature: DHT11 on GPIO17 (physical pin 11), read with dht11.py (no kernel overlay)
+TEMP_ENABLED = True
+TEMP_GPIO = 17
+TEMP_READ_SECONDS = 60  # how often to read the sensor
+TEMP_LOG_SECONDS = 600  # how often to store a reading and send it to AWS (MQTT fuzail-pi/temperature)
+TEMP_DB_PATH = os.path.join(BASE_DIR, "temperature.json")
+TEMP_KEEP_DAYS = 7
+HEAT_LIMIT_C = 35.0  # alert above this temperature...
+HEAT_JUMP_C = 5.0  # ...or when it rises this much...
+HEAT_JUMP_MINUTES = 10  # ...within this many minutes
+HEAT_ALERT_COOLDOWN = 1800  # seconds between heat alerts
+TEMP_PATTERN = re.compile(r"\b(temp|temperature|hot|cold|warm|cool|humid|humidity|degrees?)\b")
+
 # 1. Fast alert: send the photo immediately, the description follows
 FAST_ALERT = True
 
@@ -121,7 +137,7 @@ NTFY_SERVER = "https://ntfy.sh"
 
 # Offline alert: pings a healthchecks.io URL (set "healthcheck_url" in ~/guardian/config.json).
 # If the pings stop (Pi off, crashed, offline, guardian stopped), healthchecks.io alerts you.
-HEARTBEAT_SECONDS = 20
+HEARTBEAT_SECONDS = 60
 
 # Questions about the past ("when did someone last come in?") are answered from the event log
 HISTORY_PATTERN = re.compile(
@@ -129,6 +145,12 @@ HISTORY_PATTERN = re.compile(
     r"since i|how many|did (anyone|someone|anybody|somebody)|has (anyone|someone|anybody|somebody)|"
     r"anything happen|what happened|history|recently|last (time|\d+)|past \d+)\b")
 HISTORY_MAX_EVENTS = 15  # events shown to the LLM
+
+# Dashboard "Ask" agent: words that ask for a summary of events + temperature
+SUMMARY_PATTERN = re.compile(
+    r"\b(summar\w*|recap|overview|report|digest|busiest|quietest|pattern|activity)\b")
+ASK_MAX_TOKENS = 180  # answer length limit for the dashboard agent
+CPU_TEMP_PATH = "/sys/class/thermal/thermal_zone0/temp"
 
 # Web timeline: http://<pi-tailscale-ip>:WEB_PORT/?key=<web_key from config.json>
 # Listens only on the Tailscale address, so only your own devices can reach it.
@@ -147,6 +169,7 @@ CASCADE_PATHS = [
 
 llm = ChatOllama(model=AGENT_MODEL, temperature=0, num_thread=2, format="json")
 llm_text = ChatOllama(model=AGENT_MODEL, temperature=0, num_thread=2, num_predict=80)
+llm_answer = ChatOllama(model=AGENT_MODEL, temperature=0, num_thread=2, num_predict=ASK_MAX_TOKENS)
 
 # Runtime state shared by the graph and the command handler
 runtime = {
@@ -156,11 +179,15 @@ runtime = {
     "mode": "away",  # away = armed, home = motion ignored
     "away_since": time.time(),
     "last_away": None,  # [start, end] of the most recent completed away period
+    "temp": None,  # latest reading {"c", "f", "humidity", "time"}
+    "temp_recent": deque(maxlen=60),  # (time, c) for heat-jump detection
+    "last_heat_alert": 0.0,
 }
 watcher = None
 detector = None
 person_detector = None
 db_lock = threading.Lock()  # TinyDB is shared by the main loop and the AI worker
+ask_lock = threading.Lock()  # one dashboard question at a time (protects the Pi's CPU)
 jobs = queue.Queue(maxsize=EVENT_QUEUE_SIZE)
 topics = {}
 
@@ -413,11 +440,11 @@ def upload_photo(path, key):
     threading.Thread(target=_upload, daemon=True).start()
 
 
-def publish_mqtt(event):
+def publish_mqtt(event, subtopic="guardian/event"):
     try:
         from mqtt_publish import publish  # same folder as this script
 
-        publish("guardian/event", event)
+        publish(subtopic, event)
     except Exception as e:  # broker down shouldn't stop the guardian
         print(f"MQTT publish failed: {e}", flush=True)
 
@@ -746,8 +773,10 @@ def away_summary(since):
     people = sum(1 for e in events if e.get("reason") == "Person spotted")
     suspicious = sum(1 for e in events if str(e.get("reason", "")).startswith("Looks suspicious"))
     away_for = _duration(time.time() - since)
+    temps = temp_range_text(since, time.time())
+    temps = f" {temps}" if temps else ""
     if not events:
-        return f"All quiet while you were out ({away_for})."
+        return f"All quiet while you were out ({away_for}).{temps}"
     parts = [f"{len(events)} motion event{'s' * (len(events) != 1)}",
              f"{people} {'person' if people == 1 else 'people'} spotted",
              f"{suspicious} suspicious" if suspicious else "nothing suspicious"]
@@ -755,7 +784,7 @@ def away_summary(since):
     last = alerts[-1] if alerts else events[-1]
     when = datetime.fromisoformat(last["timestamp"]).astimezone().strftime("%H:%M")
     return (f"While you were out ({away_for}): {', '.join(parts)}. "
-            f"Last: {(last.get('description') or last.get('reason', ''))[:120].rstrip('.')} ({when}).")
+            f"Last: {(last.get('description') or last.get('reason', ''))[:120].rstrip('.')} ({when}).{temps}")
 
 
 def set_away():
@@ -799,7 +828,9 @@ def history_window(question):
             return start, end, "while you were out"
     if "yesterday" in q:
         return midnight - 86400, midnight, "yesterday"
-    if "this week" in q:
+    if re.search(r"\bmonth(ly)?\b", q):
+        return now - 30 * 86400, now, "the last 30 days"
+    if re.search(r"\bweek(ly)?\b", q):
         return now - 7 * 86400, now, "the last 7 days"
     if re.search(r"\b(today|tonight|this (morning|afternoon|evening))\b", q):
         return midnight, now, "today"
@@ -857,6 +888,121 @@ def heartbeat(url):
         time.sleep(HEARTBEAT_SECONDS)
 
 
+# --- Temperature ---
+def c_to_f(c):
+    return round(c * 9 / 5 + 32, 1)
+
+
+def temp_text(c):
+    return f"{c_to_f(c)}F ({c}C)"  # plain F/C: notification titles must be ASCII
+
+
+def temp_rows(start=0.0, end=None):
+    """Logged readings between start and end (epoch seconds)."""
+    end = end or time.time()
+    with db_lock:
+        rows = TinyDB(TEMP_DB_PATH).all()
+    return [r for r in rows if start <= r["time"] <= end]
+
+
+def temp_range_text(start, end):
+    rows = temp_rows(start, end)
+    if not rows:
+        return ""
+    cs = [r["c"] for r in rows]
+    return f"Temperature {temp_text(min(cs))} to {temp_text(max(cs))}."
+
+
+def log_temperature(c, humidity):
+    """Store a reading locally and send it to AWS (same format as log_temp.py)."""
+    now = time.time()
+    with db_lock:
+        db = TinyDB(TEMP_DB_PATH)
+        db.insert({"time": now, "c": c, "humidity": humidity})
+        cutoff = now - TEMP_KEEP_DAYS * 86400
+        db.remove(lambda r: r["time"] < cutoff)
+    ts = datetime.now(timezone.utc)
+    publish_mqtt({
+        "filename": f"temp_{ts.strftime('%Y%m%dT%H%M%SZ')}.json",
+        "reading_type": "temperature",
+        "temperature_c": str(c),
+        "temperature_f": str(c_to_f(c)),
+        "humidity": str(humidity),
+        "timestamp": ts.isoformat(),
+    }, subtopic="temperature")
+
+
+def check_heat(c, now):
+    """Alert on a high temperature or a fast rise. Ignores snooze and home mode (safety)."""
+    recent = runtime["temp_recent"]
+    recent.append((now, c))
+    window = [t for when, t in recent if now - when <= HEAT_JUMP_MINUTES * 60]
+    if c >= HEAT_LIMIT_C:
+        reason = f"Over {temp_text(HEAT_LIMIT_C)}"
+    elif window and c - min(window) >= HEAT_JUMP_C:
+        reason = f"Rose {round(c - min(window), 1)}C in {HEAT_JUMP_MINUTES} min"
+    else:
+        return
+    if now - runtime["last_heat_alert"] < HEAT_ALERT_COOLDOWN:
+        return
+    runtime["last_heat_alert"] = now
+    frame = watcher.grab()
+    path = save_frame(frame, datetime.now().strftime("heat_%Y%m%d_%H%M%S"))
+    send_ntfy(f"Temperature alert ({_clock()})",
+              f"{reason}: now {temp_text(c)}. Checking the camera for smoke or fire...",
+              path, "fire,thermometer", 5)
+    enqueue(mode="question", trigger="heat", frame=frame, question="Is there smoke or fire in this image?")
+    print(f"Heat alert: {reason}, {temp_text(c)}", flush=True)
+
+
+def temperature_loop():
+    try:
+        from dht11 import DHT11  # same folder as this script
+
+        sensor = DHT11(TEMP_GPIO)
+    except Exception as e:
+        print(f"Temperature sensor off ({e})", flush=True)
+        return
+    print(f"Temperature sensor on (DHT11, GPIO{TEMP_GPIO})", flush=True)
+    last_log = 0.0
+    while True:
+        try:
+            c, humidity = sensor.read()
+            now = time.time()
+            runtime["temp"] = {"c": c, "f": c_to_f(c), "humidity": humidity, "time": now}
+            if now - last_log >= TEMP_LOG_SECONDS:
+                last_log = now
+                log_temperature(c, humidity)
+            check_heat(c, now)
+        except Exception as e:
+            print(f"Temperature read failed: {e}", flush=True)
+        time.sleep(TEMP_READ_SECONDS)
+
+
+def answer_temperature(question):
+    """'what's the temperature?' -> current reading; 'how hot did it get today?' -> range."""
+    cur = runtime["temp"]
+    if is_history_question(question):
+        start, end, label = history_window(question)
+        rows = temp_rows(start, end)
+        if rows:
+            cs = [r["c"] for r in rows]
+            hottest = max(rows, key=lambda r: r["c"])
+            when = datetime.fromtimestamp(hottest["time"]).strftime("%a %H:%M")
+            text = (f"{label.capitalize()}: low {temp_text(min(cs))}, high {temp_text(max(cs))} "
+                    f"(at {when}), average {temp_text(round(sum(cs) / len(cs), 1))}.")
+        else:
+            text = f"No temperature readings for {label}."
+    elif cur:
+        age = int(time.time() - cur["time"])
+        text = (f"It's {temp_text(cur['c'])} with {cur['humidity']}% humidity "
+                f"(read {age // 60} min ago)." if age >= 120 else
+                f"It's {temp_text(cur['c'])} with {cur['humidity']}% humidity.")
+    else:
+        text = "No temperature reading yet. Is the sensor connected?"
+    send_ntfy(f"Temperature ({_clock()})", text, tags="thermometer", buttons=False)
+
+
 # --- Phone commands ---
 def status_text():
     today = datetime.now().strftime("%Y%m%d")
@@ -870,7 +1016,8 @@ def status_text():
         state = "Away (armed)"
     detection = "YOLO" if (detector or person_detector) else "Moondream"
     last = f"Last: {(events[-1]['description'] or events[-1]['reason'])[:120]}" if events else "No events yet today."
-    return f"{state} ({detection} detection). Today: {len(events)} events, {alerts} alerts. {last}"
+    temp = f" Now {temp_text(runtime['temp']['c'])}." if runtime["temp"] else ""
+    return f"{state} ({detection} detection). Today: {len(events)} events, {alerts} alerts. {last}{temp}"
 
 
 def handle_command(text):
@@ -894,10 +1041,176 @@ def handle_command(text):
         set_home()
     elif t == "status":
         send_ntfy("Status", status_text(), tags="bar_chart", buttons=False)
+    elif TEMP_ENABLED and TEMP_PATTERN.search(t):
+        answer_temperature(text)
     elif is_history_question(text):
         enqueue(kind="history", question=text)
     else:
         enqueue(mode="question", trigger="manual", frame=watcher.grab(), question=text)
+
+
+# --- Dashboard "Ask" agent ---
+# A small LangGraph agent: plan picks the tools a question needs, each tool node gathers facts
+# (event log, temperature log, live camera), and compose has Llama write the answer from those
+# facts only. Code does the counting; the LLM only phrases it, so numbers can't be invented.
+def cpu_temp_c():
+    try:
+        with open(CPU_TEMP_PATH) as f:
+            return round(int(f.read().strip()) / 1000, 1)
+    except (OSError, ValueError):
+        return None
+
+
+def _hour(h):
+    return datetime.now().replace(hour=h, minute=0).strftime("%I %p").lstrip("0")
+
+
+class AskState(TypedDict, total=False):
+    question: str
+    tools: list  # tools still to run, in order
+    summary: bool
+    window: tuple  # (start, end, label)
+    facts: list  # fact paragraphs for the LLM
+    fallback: list  # plain sentences used if the LLM is unavailable
+    events: list  # related events shown under the answer
+    image: str  # live photo taken for a camera question
+    answer: str
+    used_llm: bool
+
+
+def ask_plan(state: AskState):
+    q = state["question"].lower()
+    summary = bool(SUMMARY_PATTERN.search(q))
+    tools = []
+    about_temp = bool(TEMP_PATTERN.search(q) or re.search(r"\b(cpu|thermal)\b", q))
+    if summary or (is_history_question(q) and not about_temp):
+        tools.append("events")
+    if summary or about_temp:
+        tools.append("temperature")
+    if not tools:
+        tools.append("camera")  # a question about right now: look at the room
+    return {"tools": tools, "summary": summary, "window": history_window(q),
+            "facts": [], "fallback": [], "events": [], "image": ""}
+
+
+def ask_next(state: AskState):
+    return state["tools"][0] if state["tools"] else "compose"
+
+
+def ask_events(state: AskState):
+    start, end, label = state["window"]
+    events = [e for e in sorted(db_all(), key=lambda e: e["timestamp"])
+              if e.get("mode") == "auto" and start <= _local(e).timestamp() <= end]
+    kinds = [_kind(e) for e in events]
+    people, suspicious = kinds.count("person"), kinds.count("suspicious")
+    notable = [e for e, k in zip(events, kinds) if k in ("person", "suspicious")]
+    lines = [f"Period: {label}. Motion events: {len(events)}. People spotted: {people}. "
+             f"Suspicious: {suspicious}. Alerts sent: {sum(1 for e in events if e.get('alert'))}."]
+    if events:
+        if end - start > 36 * 3600:
+            per_day = Counter(_local(e).strftime("%a %b %d") for e in events)
+            lines.append("Events per day: " + ", ".join(f"{d}: {n}" for d, n in per_day.items()) + ".")
+        hour, n = Counter(_local(e).hour for e in events).most_common(1)[0]
+        lines.append(f"Busiest hour: {_hour(hour)} ({n} events). "
+                     f"First event {_local(events[0]).strftime('%a %H:%M')}, "
+                     f"last {_local(events[-1]).strftime('%a %H:%M')}.")
+        shown = (notable or events)[-HISTORY_MAX_EVENTS:]
+        lines.append(("Notable events" if notable else "Events") + " (oldest first):\n" + "\n".join(
+            f"- {_local(e).strftime('%a %H:%M')}: {e.get('reason') or 'Motion'} - "
+            f"{(e.get('description') or '').rstrip('.')}" for e in shown))
+        key = (notable or events)[-1]
+        fallback = (f"{label.capitalize()}: {len(events)} motion event(s), {people} with people, "
+                    f"{suspicious} suspicious. Most recent{' notable' if notable else ''}: "
+                    f"{_local(key).strftime('%a %H:%M')}, {(key.get('description') or key.get('reason') or 'motion').rstrip('.')}.")
+    else:
+        fallback = f"Nothing was recorded {'in ' if label.startswith('the ') else ''}{label}."
+    related = [_web_event(e) for e in reversed((notable or events)[-4:])]
+    return {"tools": state["tools"][1:], "facts": state["facts"] + ["\n".join(lines)],
+            "fallback": state["fallback"] + [fallback], "events": related}
+
+
+def ask_temperature(state: AskState):
+    start, end, label = state["window"]
+    lines, plain = [], []
+    cur = runtime["temp"]
+    if cur:
+        lines.append(f"Room now: {temp_text(cur['c'])}, {cur['humidity']}% humidity.")
+        plain.append(f"It's {temp_text(cur['c'])} with {cur['humidity']}% humidity.")
+    rows = temp_rows(start, end)
+    if rows:
+        cs = [r["c"] for r in rows]
+        hot, cold = max(rows, key=lambda r: r["c"]), min(rows, key=lambda r: r["c"])
+        hums = [r["humidity"] for r in rows]
+        at = lambda r: datetime.fromtimestamp(r["time"]).strftime("%a %H:%M")
+        lines.append(f"Room temperature over {label}: low {temp_text(cold['c'])} ({at(cold)}), "
+                     f"high {temp_text(hot['c'])} ({at(hot)}), average {temp_text(round(sum(cs) / len(cs), 1))}. "
+                     f"Humidity {min(hums)}-{max(hums)}%.")
+        plain.append(f"{label.capitalize()}: low {temp_text(cold['c'])}, high {temp_text(hot['c'])}.")
+    elif not cur:
+        lines.append("Room temperature: no readings (the sensor is not connected or not reading).")
+        plain.append("No room temperature readings yet; the sensor isn't reporting.")
+    cpu = cpu_temp_c()
+    if cpu is not None:
+        lines.append(f"Raspberry Pi CPU temperature now: {temp_text(cpu)}.")
+        plain.append(f"The Pi's CPU is at {temp_text(cpu)}.")
+    return {"tools": state["tools"][1:], "facts": state["facts"] + [" ".join(lines)],
+            "fallback": state["fallback"] + [" ".join(plain)]}
+
+
+def ask_camera(state: AskState):
+    now = datetime.now()
+    path = save_frame(watcher.grab(), now.strftime("%Y%m%d_%H%M%S_") + f"{now.microsecond // 1000:03d}_ask")
+    try:
+        text = describe_image(path, state["question"])
+    except Exception as e:
+        text = f"I couldn't look at the camera ({e})."
+    return {"tools": state["tools"][1:], "image": os.path.basename(path), "answer": text}
+
+
+def ask_compose(state: AskState):
+    if state.get("answer"):  # camera answers come straight from Moondream
+        return {"used_llm": False}
+    plain = " ".join(state["fallback"])
+    style = ("Write a short summary in 3-4 sentences: activity first (counts, busiest time, anything "
+             "notable), then temperature." if state["summary"] else "Answer in 1-2 short sentences.")
+    try:
+        reply = llm_answer.invoke(
+            "You are Room Guardian, the assistant for a home security camera with a temperature sensor. "
+            "Answer the question using ONLY the facts below. Never invent events, times or numbers; "
+            "if the facts don't cover it, say so. Give temperatures in F. " + style +
+            "\n\nFacts:\n" + "\n\n".join(state["facts"]) +
+            f"\n\nQuestion: {state['question']}\nAnswer:").content.strip()
+        if reply:
+            return {"answer": reply, "used_llm": True}
+    except Exception as e:
+        print(f"Ask LLM failed ({e}); using the plain answer", flush=True)
+    return {"answer": plain, "used_llm": False}
+
+
+def build_ask_graph():
+    g = StateGraph(AskState)
+    steps = ["events", "temperature", "camera", "compose"]
+    g.add_node("plan", ask_plan)
+    for name, fn in zip(steps, [ask_events, ask_temperature, ask_camera, ask_compose]):
+        g.add_node(name, fn)
+    g.add_edge(START, "plan")
+    for node in ["plan", "events", "temperature", "camera"]:
+        g.add_conditional_edges(node, ask_next, steps)
+    g.add_edge("compose", END)
+    return g.compile()
+
+
+ask_graph = build_ask_graph()
+
+
+def ask(question):
+    """Answer a dashboard question. Returns JSON for the web page."""
+    started = time.time()
+    s = ask_graph.invoke({"question": question})
+    print(f"Ask: {question!r} -> {s['answer'][:100]!r} ({time.time() - started:.1f}s)", flush=True)
+    period = "" if s["image"] else s["window"][2]  # camera answers are about right now
+    return {"answer": s["answer"], "period": period, "events": s["events"], "image": s["image"],
+            "used_llm": s.get("used_llm", False), "seconds": round(time.time() - started, 1)}
 
 
 # --- Web timeline ---
@@ -921,6 +1234,16 @@ def _kind(e):
     return "motion"
 
 
+def _web_event(e, kind=None):
+    image = e.get("image", "")
+    return {
+        "id": e["id"], "time": _local(e).isoformat(), "kind": kind or _kind(e),
+        "reason": e.get("reason", ""), "description": e.get("description", ""),
+        "alert": bool(e.get("alert")), "labels": e.get("labels") or {},
+        "image": image if image and os.path.exists(os.path.join(EVENTS_DIR, image)) else "",
+    }
+
+
 def web_events(filter_="all", day=None, limit=200):
     events = sorted(db_all(), key=lambda e: e["timestamp"])
     if day:
@@ -934,13 +1257,7 @@ def web_events(filter_="all", day=None, limit=200):
             continue
         if filter_ == "alerts" and not (e.get("alert") and e.get("mode") == "auto"):
             continue
-        image = e.get("image", "")
-        out.append({
-            "id": e["id"], "time": _local(e).isoformat(), "kind": kind,
-            "reason": e.get("reason", ""), "description": e.get("description", ""),
-            "alert": bool(e.get("alert")), "labels": e.get("labels") or {},
-            "image": image if image and os.path.exists(os.path.join(EVENTS_DIR, image)) else "",
-        })
+        out.append(_web_event(e, kind))
         if len(out) >= limit:
             break
     return out
@@ -961,6 +1278,9 @@ def web_status():
                   "people": sum(1 for e in auto if _kind(e) == "person"),
                   "suspicious": sum(1 for e in auto if _kind(e) == "suspicious")},
         "last_event": _local(auto[-1]).strftime("%H:%M") if auto else None,
+        "temperature": ({**runtime["temp"], "age_s": int(time.time() - runtime["temp"]["time"])}
+                        if runtime["temp"] else None),
+        "cpu_c": cpu_temp_c(),
     }
 
 
@@ -1020,6 +1340,10 @@ def make_web_handler(web_key):
                 return self._file(os.path.join(WEB_DIR, "index.html"), "text/html; charset=utf-8")
             if url.path == "/api/status":
                 return self._send(200, web_status())
+            if url.path == "/api/temperature":
+                hours = min(float(query.get("hours", ["24"])[0] or 24), 24 * TEMP_KEEP_DAYS)
+                rows = temp_rows(time.time() - hours * 3600)
+                return self._send(200, [{"t": int(r["time"]), "c": r["c"], "h": r["humidity"]} for r in rows])
             if url.path == "/api/events":
                 return self._send(200, web_events(query.get("filter", ["all"])[0],
                                                   query.get("day", [None])[0] or None))
@@ -1053,6 +1377,19 @@ def make_web_handler(web_key):
             if url.path == "/api/mode":
                 set_home() if body.get("mode") == "home" else set_away()
                 return self._send(200, web_status())
+            if url.path == "/api/ask":
+                question = str(body.get("question", "")).strip()[:300]
+                if not question:
+                    return self._send(400, {"error": "Type a question"})
+                if not ask_lock.acquire(blocking=False):
+                    return self._send(429, {"error": "Still answering the previous question"})
+                try:
+                    return self._send(200, ask(question))
+                except Exception as e:
+                    print(f"Ask failed: {e}", flush=True)
+                    return self._send(500, {"error": f"Couldn't answer: {e}"})
+                finally:
+                    ask_lock.release()
             if url.path == "/api/snooze":
                 minutes = int(body.get("minutes", 0))
                 runtime["snooze_until"] = time.time() + minutes * 60 if minutes > 0 else 0.0
@@ -1106,6 +1443,8 @@ def main():
         print("Heartbeat on: you'll be alerted if the guardian goes offline", flush=True)
     else:
         print("Heartbeat off (no healthcheck_url in config.json)", flush=True)
+    if TEMP_ENABLED:
+        threading.Thread(target=temperature_loop, daemon=True).start()
     if WEB_ENABLED:
         threading.Thread(target=run_web, args=(topics["web_key"],), daemon=True).start()
     commands = queue.Queue()
