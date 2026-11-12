@@ -106,6 +106,7 @@ TEMP_PATTERN = re.compile(r"\b(temp|temperature|hot|cold|warm|cool|humid|humidit
 BUZZER_ENABLED = True
 BUZZER_GPIO = 27
 BUZZER_PASSIVE = False  # True for a passive buzzer (needs a tone signal)
+BUZZER_TONE_HZ = 3000  # passive buzzer tone; `python3 actuators.py tones` finds the loudest
 BUZZER_ACTIVE_LOW = False  # True for "low-level trigger" modules
 BUZZER_VOLUME = 0.6  # starting volume, 0.05-1.0 (change it live from the dashboard; the last one is remembered)
 BUZZER_ON_SUSPICIOUS = True  # alarm when something suspicious is seen while away
@@ -1149,7 +1150,7 @@ def start_buzzer():
     try:
         from actuators import Buzzer  # same folder as this script
 
-        buzzer = Buzzer(BUZZER_GPIO, BUZZER_PASSIVE, BUZZER_ACTIVE_LOW,
+        buzzer = Buzzer(BUZZER_GPIO, BUZZER_PASSIVE, BUZZER_ACTIVE_LOW, tone_hz=BUZZER_TONE_HZ,
                         volume=runtime["buzzer_volume"] or BUZZER_VOLUME)
     except Exception as e:
         print(f"Buzzer off ({e})", flush=True)
