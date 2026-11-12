@@ -52,6 +52,7 @@ EVENTS_DIR = os.path.join(BASE_DIR, "events")
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 DB_PATH = os.path.join(BASE_DIR, "events.json")
 STATE_PATH = os.path.join(BASE_DIR, "state.json")
+LABELS_PATH = os.path.join(BASE_DIR, "labels.json")  # your hand labels for evaluate.py (from /label)
 
 # Presence: your phone sends "away" / "home" to the command topic (iOS Shortcuts
 # location automation). While you're home, motion is ignored; snapshots and questions still work.
@@ -98,6 +99,22 @@ HEAT_JUMP_C = 5.0  # ...or when it rises this much...
 HEAT_JUMP_MINUTES = 10  # ...within this many minutes
 HEAT_ALERT_COOLDOWN = 1800  # seconds between heat alerts
 TEMP_PATTERN = re.compile(r"\b(temp|temperature|hot|cold|warm|cool|humid|humidity|degrees?)\b")
+
+# Buzzer actuator (GPIO27 = physical pin 13). Every command goes over MQTT:
+#   publish {"action": "alarm"} (or plain text) to fuzail-pi/cmd/buzzer; state is published
+#   (retained) to fuzail-pi/state/buzzer. Run `python3 actuators.py` to find your buzzer's type.
+BUZZER_ENABLED = True
+BUZZER_GPIO = 27
+BUZZER_PASSIVE = False  # True for a passive buzzer (needs a tone signal)
+BUZZER_ACTIVE_LOW = False  # True for "low-level trigger" modules
+BUZZER_VOLUME = 0.6  # starting volume, 0.05-1.0 (change it live from the dashboard; the last one is remembered)
+BUZZER_ON_SUSPICIOUS = True  # alarm when something suspicious is seen while away
+BUZZER_ON_PERSON = False  # beep when a person is seen while away
+BUZZER_ON_HEAT = True  # alarm on a temperature alert
+BUZZER_ACTIONS = ("on", "off", "beep", "double", "alarm", "chirp")
+MQTT_HOST = "localhost"
+BUZZER_CMD_TOPIC = "fuzail-pi/cmd/buzzer"
+BUZZER_STATE_TOPIC = "fuzail-pi/state/buzzer"
 
 # 1. Fast alert: send the photo immediately, the description follows
 FAST_ALERT = True
@@ -152,6 +169,16 @@ SUMMARY_PATTERN = re.compile(
 ASK_MAX_TOKENS = 180  # answer length limit for the dashboard agent
 CPU_TEMP_PATH = "/sys/class/thermal/thermal_zone0/temp"
 
+# Tool-calling agent (tool_agent.py): the small language model picks tools and actions,
+# code checks them against an allow-list, and disarming/snoozing need a "yes" first.
+AGENT_ENGINE = "tools"  # "tools" = tool-calling agent (falls back to rules); "rules" = keyword routing only
+TOOL_MODEL = AGENT_MODEL  # e.g. "llama3.2:3b" or "granite3.1-moe:1b" (ollama pull it first)
+AGENT_LOG_PATH = os.path.join(BASE_DIR, "agent_log.jsonl")  # audit log of every request
+# Commands the agent has no tool for are refused instead of being treated as questions
+COMMAND_PATTERN = re.compile(
+    r"^\s*(please\s+)?(turn|switch|shut|disable|enable|delete|erase|remove|unlock|lock|open|close|kill|"
+    r"reboot|restart|shutdown|format|send|email|text|call|upload|record|change|set|start|stop)\b", re.I)
+
 # Web timeline: http://<pi-tailscale-ip>:WEB_PORT/?key=<web_key from config.json>
 # Listens only on the Tailscale address, so only your own devices can reach it.
 WEB_ENABLED = True
@@ -168,7 +195,6 @@ CASCADE_PATHS = [
 ]
 
 llm = ChatOllama(model=AGENT_MODEL, temperature=0, num_thread=2, format="json")
-llm_text = ChatOllama(model=AGENT_MODEL, temperature=0, num_thread=2, num_predict=80)
 llm_answer = ChatOllama(model=AGENT_MODEL, temperature=0, num_thread=2, num_predict=ASK_MAX_TOKENS)
 
 # Runtime state shared by the graph and the command handler
@@ -182,10 +208,12 @@ runtime = {
     "temp": None,  # latest reading {"c", "f", "humidity", "time"}
     "temp_recent": deque(maxlen=60),  # (time, c) for heat-jump detection
     "last_heat_alert": 0.0,
+    "buzzer_volume": None,  # set from the dashboard/phone/MQTT; saved in state.json
 }
 watcher = None
 detector = None
 person_detector = None
+buzzer = None
 db_lock = threading.Lock()  # TinyDB is shared by the main loop and the AI worker
 ask_lock = threading.Lock()  # one dashboard question at a time (protects the Pi's CPU)
 jobs = queue.Queue(maxsize=EVENT_QUEUE_SIZE)
@@ -483,10 +511,20 @@ class GuardianState(TypedDict, total=False):
     unsure: bool
     reason: str
     attempts: int
+    timing: dict  # seconds since motion was detected, per stage (for evaluate.py)
 
 
 def _clock():
     return datetime.now().strftime("%H:%M")
+
+
+def _mark(state, name, **extra):
+    """Record how long after motion detection a stage finished (only for motion events)."""
+    timing = dict(state.get("timing") or {})
+    if "t0" in timing:
+        timing[name] = round(time.time() - timing["t0"], 2)
+    timing.update(extra)
+    return timing
 
 
 def _what(state):
@@ -558,15 +596,17 @@ def quick_alert(state: GuardianState):
         send_ntfy(f"Motion ({_clock()})", "Checking what it is...", state["image_path"],
                   "eyes", 2, buttons=False)
     runtime["last_alert"] = time.time()
-    return {"quick_sent": True}
+    return {"quick_sent": True, "timing": _mark(state, "alert")}
 
 
 def describe(state: GuardianState):
+    started = time.time()
     try:
         text = describe_image(state["image_path"], state.get("question") or DESCRIBE_PROMPT)
     except Exception as e:
         text = f"(vision failed: {e})"
-    return {"description": text}
+    return {"description": text,
+            "timing": _mark(state, "described", describe_s=round(time.time() - started, 2))}
 
 
 def after_describe(state: GuardianState):
@@ -649,7 +689,15 @@ def notify(state: GuardianState):
         send_ntfy(f"{title} ({_clock()})", _details(state), state["image_path"], tags, priority,
                   buttons=state.get("alert", False))
         runtime["last_alert"] = time.time()
-    return {"alert": bool(state.get("alert")) or mode != "auto"}
+    if mode == "auto" and state.get("alert") and runtime["mode"] == "away":
+        if str(state.get("reason", "")).startswith("Looks suspicious") and BUZZER_ON_SUSPICIOUS:
+            buzz("alarm", "rule: suspicious")
+        elif BUZZER_ON_PERSON:
+            buzz("double", "rule: person")
+    timing = _mark(state, "followup")
+    if "t0" in timing and "alert" not in timing:
+        timing["alert"] = timing["followup"]  # no quick alert: this was the first message
+    return {"alert": bool(state.get("alert")) or mode != "auto", "timing": timing}
 
 
 def log(state: GuardianState):
@@ -668,6 +716,9 @@ def log(state: GuardianState):
         "s3_key": f"{S3_PREFIX}/{os.path.basename(state['image_path'])}" if UPLOAD_TO_S3 else "",
         "expires_at": int(time.time()) + RETENTION_DAYS * 86400,  # DynamoDB TTL (epoch seconds)
     }
+    timing = _mark(state, "total")
+    if "t0" in timing:
+        event["timing"] = {k: v for k, v in timing.items() if k != "t0"}
     with db_lock:
         TinyDB(DB_PATH).insert(event)
     if UPLOAD_TO_S3:
@@ -705,15 +756,16 @@ def build_graph():
 graph = build_graph()
 
 
-def run_event(mode, trigger, frame=None, faces=0, motion=0.0, question=None, labels=None):
+def run_event(mode, trigger, frame=None, faces=0, motion=0.0, question=None, labels=None, timing=None):
     now = datetime.now()
     event_id = now.strftime("%Y%m%d_%H%M%S_") + f"{now.microsecond // 1000:03d}"
     if frame is None:
         frame = watcher.grab()
+    state = {"timing": dict(timing or {})}
     graph.invoke({
         "event_id": event_id, "mode": mode, "trigger": trigger, "faces": faces,
         "motion": motion, "question": question or "", "attempts": 0, "labels": labels or {},
-        "image_path": save_frame(frame, event_id),
+        "image_path": save_frame(frame, event_id), "timing": _mark(state, "queue"),
     })
 
 
@@ -734,8 +786,8 @@ def ai_worker():
     while True:
         event = jobs.get()
         try:
-            if event.pop("kind", None) == "history":
-                answer_history(event["question"])
+            if event.pop("kind", None) == "ask":
+                answer_on_phone(event["question"])
             else:
                 run_event(**event)
         except Exception as e:
@@ -751,6 +803,7 @@ def load_state():
         runtime["mode"] = saved.get("mode", "away")
         runtime["away_since"] = saved.get("away_since", time.time())
         runtime["last_away"] = saved.get("last_away")
+        runtime["buzzer_volume"] = saved.get("buzzer_volume")
     except (OSError, ValueError):
         pass
 
@@ -758,7 +811,7 @@ def load_state():
 def save_state():
     with open(STATE_PATH, "w") as f:
         json.dump({"mode": runtime["mode"], "away_since": runtime["away_since"],
-                   "last_away": runtime["last_away"]}, f)
+                   "last_away": runtime["last_away"], "buzzer_volume": runtime["buzzer_volume"]}, f)
 
 
 def _duration(seconds):
@@ -837,47 +890,6 @@ def history_window(question):
     return now - 86400, now, "the last 24 hours"
 
 
-def answer_history(question):
-    """Answer a question about past events: code finds the facts, Llama phrases them."""
-    start, end, label = history_window(question)
-    events = [e for e in db_all() if e.get("mode") == "auto"
-              and start <= datetime.fromisoformat(e["timestamp"]).timestamp() <= end]
-    people = [e for e in events if e.get("reason") == "Person spotted"]
-    suspicious = [e for e in events if str(e.get("reason", "")).startswith("Looks suspicious")]
-
-    def line(e):
-        when = datetime.fromisoformat(e["timestamp"]).astimezone().strftime("%a %H:%M")
-        return f"- {when}: {e.get('reason') or 'Motion'} - {(e.get('description') or '').rstrip('.')}"
-
-    facts = (f"Period: {label}. Motion events: {len(events)}. People spotted: {len(people)}. "
-             f"Suspicious: {len(suspicious)}.\nEvents (oldest first):\n"
-             + ("\n".join(line(e) for e in events[-HISTORY_MAX_EVENTS:]) or "- none"))
-    # Fallback answer built from facts only (used if the LLM is unavailable)
-    if not events:
-        answer = f"Nothing was recorded {'in ' if label.startswith('the ') else ''}{label}."
-    else:
-        key = (suspicious or people or events)[-1]
-        answer = (f"{label.capitalize()}: {len(events)} event(s), {len(people)} with people, "
-                  f"{len(suspicious)} suspicious. Most recent: {line(key)[2:]}.")
-    if events:
-        try:
-            reply = llm_text.invoke(
-                "You answer questions about a home security camera's event log. Use ONLY the facts "
-                "below; never invent events or times. Answer in 1-2 short sentences.\n\n"
-                f"{facts}\n\nQuestion: {question}\nAnswer:").content.strip()
-            answer = reply or answer
-        except Exception as e:
-            print(f"History LLM failed ({e}); sending the plain summary", flush=True)
-
-    photo = None
-    if events:
-        key = (suspicious or people or events)[-1]
-        path = os.path.join(EVENTS_DIR, key.get("image", ""))
-        photo = path if key.get("image") and os.path.exists(path) else None
-    send_ntfy(f"Answer ({_clock()})", answer, photo, "speech_balloon", 3, buttons=False)
-    print(f"History answer ({label}, {len(events)} events): {answer}", flush=True)
-
-
 def heartbeat(url):
     """Ping healthchecks.io so it can alert you if the Pi or the guardian goes silent."""
     while True:
@@ -952,6 +964,8 @@ def check_heat(c, now):
               f"{reason}: now {temp_text(c)}. Checking the camera for smoke or fire...",
               path, "fire,thermometer", 5)
     enqueue(mode="question", trigger="heat", frame=frame, question="Is there smoke or fire in this image?")
+    if BUZZER_ON_HEAT:
+        buzz("alarm", "rule: heat")
     print(f"Heat alert: {reason}, {temp_text(c)}", flush=True)
 
 
@@ -977,30 +991,6 @@ def temperature_loop():
         except Exception as e:
             print(f"Temperature read failed: {e}", flush=True)
         time.sleep(TEMP_READ_SECONDS)
-
-
-def answer_temperature(question):
-    """'what's the temperature?' -> current reading; 'how hot did it get today?' -> range."""
-    cur = runtime["temp"]
-    if is_history_question(question):
-        start, end, label = history_window(question)
-        rows = temp_rows(start, end)
-        if rows:
-            cs = [r["c"] for r in rows]
-            hottest = max(rows, key=lambda r: r["c"])
-            when = datetime.fromtimestamp(hottest["time"]).strftime("%a %H:%M")
-            text = (f"{label.capitalize()}: low {temp_text(min(cs))}, high {temp_text(max(cs))} "
-                    f"(at {when}), average {temp_text(round(sum(cs) / len(cs), 1))}.")
-        else:
-            text = f"No temperature readings for {label}."
-    elif cur:
-        age = int(time.time() - cur["time"])
-        text = (f"It's {temp_text(cur['c'])} with {cur['humidity']}% humidity "
-                f"(read {age // 60} min ago)." if age >= 120 else
-                f"It's {temp_text(cur['c'])} with {cur['humidity']}% humidity.")
-    else:
-        text = "No temperature reading yet. Is the sensor connected?"
-    send_ntfy(f"Temperature ({_clock()})", text, tags="thermometer", buttons=False)
 
 
 # --- Phone commands ---
@@ -1041,12 +1031,130 @@ def handle_command(text):
         set_home()
     elif t == "status":
         send_ntfy("Status", status_text(), tags="bar_chart", buttons=False)
-    elif TEMP_ENABLED and TEMP_PATTERN.search(t):
-        answer_temperature(text)
-    elif is_history_question(text):
-        enqueue(kind="history", question=text)
-    else:
+    elif m := re.fullmatch(r"(?:buzzer )?volume (\d{1,3})%?", t):
+        ok = buzz("volume", "phone", m.group(1))
+        send_ntfy("Buzzer", f"Buzzer volume set to {int(m.group(1))}%." if ok
+                  else "Volume must be 5 to 100, and a buzzer must be connected.", tags="bell", buttons=False)
+    elif t in ("buzz", "beep", "alarm", "chirp", "buzzer off", "silence", "quiet", "stop"):
+        action = {"buzz": "beep", "buzzer off": "off", "silence": "off", "quiet": "off", "stop": "off"}.get(t, t)
+        ok = buzz(action, "phone")
+        send_ntfy("Buzzer", f"Buzzer: {action}" if ok else "The buzzer isn't available.",
+                  tags="bell", buttons=False)
+    elif AGENT_ENGINE == "tools" or ask_plan({"question": text})["tools"] != ["camera"]:
+        enqueue(kind="ask", question=text)  # same agent as the dashboard
+    else:  # about right now: photo + Moondream answer, logged in the timeline
         enqueue(mode="question", trigger="manual", frame=watcher.grab(), question=text)
+
+
+# --- Buzzer actuator (MQTT) ---
+def parse_volume(value):
+    """Accepts 0.05-1.0 or 5-100 (percent). Returns a fraction, or None if invalid."""
+    try:
+        v = float(str(value).strip().rstrip("%"))
+    except ValueError:
+        return None
+    v = v / 100 if v > 1 else v
+    return round(v, 2) if 0.05 <= v <= 1.0 else None
+
+
+def buzzer_command(action, source, sent_at=None, volume=None):
+    """Carry out a buzzer action (called for each MQTT command). Returns the new state."""
+    if buzzer is None:
+        return {"device": "buzzer", "state": "unavailable", "action": action, "source": source}
+    if action == "volume":
+        runtime["buzzer_volume"] = round(buzzer.set_volume(volume), 2)
+        save_state()
+    elif action == "off":
+        buzzer.off()
+    else:
+        buzzer.play(action)
+    state = {"device": "buzzer", "state": buzzer.state, "action": action, "source": source,
+             "volume": round(buzzer.volume, 2), "time": datetime.now(timezone.utc).isoformat()}
+    if isinstance(sent_at, (int, float)):
+        state["latency_ms"] = round((time.time() - sent_at) * 1000, 1)  # command -> buzzer on
+    runtime["buzzer"] = state
+    what = f"volume {buzzer.volume:.0%}" if action == "volume" else action
+    print(f"Buzzer: {what} ({source}{', %s ms' % state['latency_ms'] if 'latency_ms' in state else ''})",
+          flush=True)
+    return state
+
+
+def buzz(action, source, volume=None):
+    """Ask for a buzzer action over MQTT, like any other client would.
+    action: a pattern, "off", or "volume" (with volume 0.05-1.0 or 5-100).
+    Falls back to direct control if the local broker is down. Returns False if there's no buzzer
+    or the request isn't allowed."""
+    if buzzer is None:
+        return False
+    if action == "volume":
+        volume = parse_volume(volume)
+        if volume is None:
+            return False
+    elif action not in BUZZER_ACTIONS:
+        return False
+    message = {"action": action, "source": source, "sent_at": time.time()}
+    if action == "volume":
+        message["volume"] = volume
+    try:
+        from mqtt_publish import publish
+
+        publish(BUZZER_CMD_TOPIC.split("/", 1)[1], message)
+    except Exception as e:
+        print(f"MQTT unavailable ({e}); controlling the buzzer directly", flush=True)
+        buzzer_command(action, source, volume=volume)
+    return True
+
+
+def mqtt_actuator_loop():
+    """Subscribe to fuzail-pi/cmd/buzzer; dashboard, phone, rules, Node-RED or mosquitto_pub can send."""
+    import paho.mqtt.client as mqtt
+
+    try:
+        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="room-guardian-actuators")
+    except AttributeError:
+        client = mqtt.Client(client_id="room-guardian-actuators")
+
+    def on_connect(c, userdata, flags, rc, properties=None):
+        c.subscribe(BUZZER_CMD_TOPIC, qos=1)
+        print(f"Buzzer listening on MQTT {BUZZER_CMD_TOPIC}", flush=True)
+
+    def on_message(c, userdata, msg):
+        try:
+            data = json.loads(msg.payload)
+        except ValueError:
+            data = msg.payload.decode(errors="ignore")
+        if not isinstance(data, dict):
+            data = {"action": str(data)}
+        action = str(data.get("action", "")).strip().lower()
+        volume = None
+        if action == "volume":
+            volume = parse_volume(data.get("volume"))
+            if volume is None:
+                print(f"Buzzer: rejected volume {data.get('volume')!r} (allowed 0.05-1.0 or 5-100)", flush=True)
+                return
+        elif action not in BUZZER_ACTIONS:
+            print(f"Buzzer: rejected unknown action {action!r}", flush=True)
+            return
+        state = buzzer_command(action, str(data.get("source", "mqtt"))[:40], data.get("sent_at"), volume)
+        c.publish(BUZZER_STATE_TOPIC, json.dumps(state), qos=1, retain=True)
+
+    client.on_connect, client.on_message = on_connect, on_message
+    client.reconnect_delay_set(1, 30)
+    client.connect_async(MQTT_HOST, 1883)
+    client.loop_forever(retry_first_connection=True)
+
+
+def start_buzzer():
+    global buzzer
+    try:
+        from actuators import Buzzer  # same folder as this script
+
+        buzzer = Buzzer(BUZZER_GPIO, BUZZER_PASSIVE, BUZZER_ACTIVE_LOW,
+                        volume=runtime["buzzer_volume"] or BUZZER_VOLUME)
+    except Exception as e:
+        print(f"Buzzer off ({e})", flush=True)
+        return
+    threading.Thread(target=mqtt_actuator_loop, daemon=True).start()
 
 
 # --- Dashboard "Ask" agent ---
@@ -1167,24 +1275,29 @@ def ask_camera(state: AskState):
     return {"tools": state["tools"][1:], "image": os.path.basename(path), "answer": text}
 
 
-def ask_compose(state: AskState):
-    if state.get("answer"):  # camera answers come straight from Moondream
-        return {"used_llm": False}
-    plain = " ".join(state["fallback"])
+def compose_answer(question, facts, summary, plain):
+    """Llama writes the answer from the facts only; the plain sentences are the fallback."""
     style = ("Write a short summary in 3-4 sentences: activity first (counts, busiest time, anything "
-             "notable), then temperature." if state["summary"] else "Answer in 1-2 short sentences.")
+             "notable), then temperature." if summary else "Answer in 1-2 short sentences.")
     try:
         reply = llm_answer.invoke(
             "You are Room Guardian, the assistant for a home security camera with a temperature sensor. "
             "Answer the question using ONLY the facts below. Never invent events, times or numbers; "
             "if the facts don't cover it, say so. Give temperatures in F. " + style +
-            "\n\nFacts:\n" + "\n\n".join(state["facts"]) +
-            f"\n\nQuestion: {state['question']}\nAnswer:").content.strip()
+            "\n\nFacts:\n" + "\n\n".join(facts) +
+            f"\n\nQuestion: {question}\nAnswer:").content.strip()
         if reply:
-            return {"answer": reply, "used_llm": True}
+            return reply
     except Exception as e:
         print(f"Ask LLM failed ({e}); using the plain answer", flush=True)
-    return {"answer": plain, "used_llm": False}
+    return " ".join(plain)
+
+
+def ask_compose(state: AskState):
+    if state.get("answer"):  # camera answers come straight from Moondream
+        return {"used_llm": False}
+    answer = compose_answer(state["question"], state["facts"], state["summary"], state["fallback"])
+    return {"answer": answer, "used_llm": answer != " ".join(state["fallback"])}
 
 
 def build_ask_graph():
@@ -1211,6 +1324,174 @@ def ask(question):
     period = "" if s["image"] else s["window"][2]  # camera answers are about right now
     return {"answer": s["answer"], "period": period, "events": s["events"], "image": s["image"],
             "used_llm": s.get("used_llm", False), "seconds": round(time.time() - started, 1)}
+
+
+def answer_on_phone(question):
+    """Phone questions: the same agent as the dashboard, answer sent by ntfy with the most
+    relevant photo attached."""
+    with ask_lock:  # wait if the dashboard is answering something
+        r = ask_smart(question, session="phone")
+    image = r["image"] or next((e["image"] for e in r["events"] if e["image"]), "")
+    photo = os.path.join(EVENTS_DIR, image) if image else None
+    period = f" ({r['period']})" if r["period"] else ""
+    title = "Confirm?" if r.get("pending") else f"Answer{period}"
+    send_ntfy(title, r["answer"], photo, "speech_balloon", 3, buttons=False)
+
+
+# --- Tool-calling agent: tools and the action allow-list ---
+PERIODS = ["today", "yesterday", "last 24 hours", "this week", "this month", "since I left"]
+BUZZER_PATTERNS = ["beep", "double", "alarm", "chirp", "off"]
+
+
+def _window_state(period, question=""):
+    return {"window": history_window(str(period or "last 24 hours")), "tools": ["tool"], "facts": [],
+            "fallback": [], "events": [], "question": question}
+
+
+def tool_get_events(args, question):
+    st = _window_state(args.get("period"))
+    r = ask_events(st)
+    return {"facts": r["facts"][0], "plain": r["fallback"][0], "events": r["events"], "period": st["window"][2]}
+
+
+def tool_get_temperature(args, question):
+    st = _window_state(args.get("period"))
+    r = ask_temperature(st)
+    return {"facts": r["facts"][0], "plain": r["fallback"][0], "period": st["window"][2]}
+
+
+def tool_get_status(args, question):
+    s = web_status()
+    parts = [f"Mode: {s['mode']} ({'armed' if s['mode'] == 'away' else 'motion alerts off'})."]
+    if s["snoozed_until"]:
+        parts.append(f"Alerts snoozed until {s['snoozed_until']}.")
+    t = s["today"]
+    parts.append(f"Today: {t['events']} motion events, {t['people']} with people, {t['suspicious']} suspicious"
+                 + (f", last at {s['last_event']}." if s["last_event"] else "."))
+    if s["temperature"]:
+        parts.append(f"Room {temp_text(s['temperature']['c'])}, {s['temperature']['humidity']}% humidity.")
+    if s["cpu_c"] is not None:
+        parts.append(f"Pi CPU {temp_text(s['cpu_c'])}.")
+    if s["buzzer"]:
+        parts.append(f"Buzzer {s['buzzer']['state']}.")
+    return {"facts": " ".join(parts), "plain": status_text()}
+
+
+def tool_look_at_room(args, question):
+    r = ask_camera({"question": args.get("question") or question, "tools": ["tool"]})
+    return {"answer": r["answer"], "image": r["image"]}
+
+
+def tool_sound_buzzer(args, question):
+    if not buzz(args["pattern"], "agent"):
+        raise RuntimeError("no buzzer is connected")
+    return {"answer": "Buzzer off." if args["pattern"] == "off" else f"Buzzer: {args['pattern']}."}
+
+
+def tool_set_mode(args, question):
+    set_home() if args["mode"] == "home" else set_away()
+    return {"answer": "Disarmed: home mode, motion alerts off." if args["mode"] == "home"
+            else "Armed: away mode, motion alerts on."}
+
+
+def tool_snooze(args, question):
+    minutes = args["minutes"]
+    runtime["snooze_until"] = time.time() + minutes * 60 if minutes else 0.0
+    return {"answer": f"Alerts snoozed for {minutes} minutes." if minutes else "Alerts resumed."}
+
+
+def tool_snapshot(args, question):
+    handle_command("snapshot")
+    return {"answer": "Taking a snapshot; the photo and description will arrive on your phone."}
+
+
+def agent_context():
+    """Live device state given to the model with every request."""
+    temp = runtime["temp"]
+    return {"time": datetime.now().strftime("%a %H:%M"), "mode": runtime["mode"],
+            "alerts_snoozed": time.time() < runtime["snooze_until"],
+            "buzzer": buzzer.state if buzzer else "not connected",
+            "room_temp_f": temp["f"] if temp else None}
+
+
+def build_tool_agent():
+    from tool_agent import Tool, ToolAgent  # same folder as this script
+
+    period = {"type": "string", "enum": PERIODS, "description": "time period"}
+    tools = [
+        Tool("get_events", "What happened: motion events, people and visitors in a period, and summaries.",
+             tool_get_events, {"period": period}),
+        Tool("get_temperature", "Room temperature and humidity, now or over a period.",
+             tool_get_temperature, {"period": period}),
+        Tool("get_status", "Current settings only: armed or not, snoozed, buzzer state, Pi CPU temperature. "
+             "Not for events and not for changing anything.", tool_get_status),
+        Tool("look_at_room", "Take a photo now to answer what is in the room or on the desk right now.",
+             tool_look_at_room, {"question": {"type": "string", "description": "what to look for"}}),
+        Tool("sound_buzzer", "Sound the buzzer with a pattern, or turn it off.", tool_sound_buzzer,
+             {"pattern": {"type": "string", "enum": BUZZER_PATTERNS}}, ("pattern",), action=True,
+             describe=lambda a: "turn the buzzer off" if a.get("pattern") == "off"
+             else f"sound the buzzer ({a.get('pattern')})", label="sound or stop the buzzer"),
+        Tool("set_mode", "Change the mode: arm (away) when leaving, disarm (home) when back.", tool_set_mode,
+             {"mode": {"type": "string", "enum": ["away", "home"]}}, ("mode",), action=True,
+             confirm=lambda a: a["mode"] == "home",
+             describe=lambda a: "disarm (switch to home mode, motion alerts off)" if a.get("mode") == "home"
+             else "arm (switch to away mode)", label="arm or disarm"),
+        Tool("snooze_alerts", "Pause motion alerts for some minutes, or resume them with 0.", tool_snooze,
+             {"minutes": {"type": "integer", "minimum": 0, "maximum": 240}}, ("minutes",), action=True,
+             confirm=lambda a: a["minutes"] > 0,
+             describe=lambda a: f"snooze alerts for {a.get('minutes')} minutes" if a.get("minutes")
+             else "resume alerts", label="snooze or resume alerts (up to 4 hours)"),
+        Tool("take_snapshot", "Take a photo now and send it to the phone.", tool_snapshot, action=True,
+             label="take a snapshot"),
+    ]
+    return ToolAgent(tools, agent_context, compose_answer, server="http://localhost:11434", model=TOOL_MODEL,
+                     num_thread=VISION_THREADS, log_path=AGENT_LOG_PATH, command_pattern=COMMAND_PATTERN,
+                     routing=AGENT_ROUTING)
+
+
+# Which tool fits which request (fixed prompt text; small models follow examples better than rules)
+AGENT_ROUTING = """Questions:
+- past activity: what happened, who came in, counts, summaries -> get_events (pick the period asked about)
+- room temperature or humidity -> get_temperature
+- current settings: armed or not, snoozed, buzzer state, Pi CPU heat -> get_status
+- what can be seen in the room at this moment -> look_at_room
+Actions (only when the user asks):
+- make a sound, or silence the buzzer -> sound_buzzer
+- arm or disarm: away = armed (owner leaving), home = disarmed (owner back) -> set_mode
+- pause motion alerts for N minutes (hours x 60), or resume them with 0 -> snooze_alerts
+- take a picture now -> take_snapshot"""
+
+
+_tool_agent = None
+
+
+def get_tool_agent():
+    global _tool_agent
+    if _tool_agent is None:
+        _tool_agent = build_tool_agent()
+    return _tool_agent
+
+
+def ask_smart(question, session="web", dry_run=False, model=None):
+    """Tool-calling agent first; the rule-based agent answers if no tool was chosen or the model failed."""
+    started = time.time()
+    reason = ""
+    if AGENT_ENGINE == "tools":
+        try:
+            r = get_tool_agent().ask(question, session, dry_run, model)
+        except Exception as e:
+            r = {"engine": "none", "error": str(e)}
+        if r["engine"] == "tools" and r.get("answer"):
+            calls = ", ".join(f"{c['tool']}:{c['status']}" for c in r["tool_calls"]) or "no tools"
+            print(f"Agent: {question!r} -> [{calls}] {r['answer'][:90]!r} ({r['timing']['total_s']}s)", flush=True)
+            return {**r, "used_llm": True, "seconds": round(time.time() - started, 1)}
+        reason = (r.get("error") or "no tool chosen")[:80]
+    r = ask(question)
+    if AGENT_ENGINE == "tools":
+        get_tool_agent().remember(session, question, r["answer"])
+    return {**r, "engine": "rules", "tool_calls": [], "pending": False, "fallback_reason": reason,
+            "model": model or TOOL_MODEL, "timing": {"total_s": round(time.time() - started, 2)},
+            "seconds": round(time.time() - started, 1)}
 
 
 # --- Web timeline ---
@@ -1281,7 +1562,43 @@ def web_status():
         "temperature": ({**runtime["temp"], "age_s": int(time.time() - runtime["temp"]["time"])}
                         if runtime["temp"] else None),
         "cpu_c": cpu_temp_c(),
+        "buzzer": ({**runtime.get("buzzer", {}), "state": buzzer.state, "volume": round(buzzer.volume, 2)}
+                   if buzzer else None),
     }
+
+
+def load_labels():
+    try:
+        with open(LABELS_PATH) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def label_queue():
+    """Motion events that still have a photo, oldest first, for hand labeling."""
+    events = sorted((e for e in db_all() if e.get("mode") == "auto"), key=lambda e: e["timestamp"])
+    out = []
+    for e in events:
+        image = e.get("image", "")
+        if image and os.path.exists(os.path.join(EVENTS_DIR, image)):
+            out.append({"id": e["id"], "time": _local(e).isoformat(), "image": image})
+    return {"events": out, "labels": load_labels()}
+
+
+def save_label(event_id, value):
+    """value: person | none | unclear, or None to remove the label."""
+    with db_lock:
+        labels = load_labels()
+        if value in ("person", "none", "unclear"):
+            labels[event_id] = value
+        else:
+            labels.pop(event_id, None)
+        tmp = LABELS_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(labels, f, indent=0, sort_keys=True)
+        os.replace(tmp, LABELS_PATH)
+    return labels
 
 
 def thumbnail(name):
@@ -1338,6 +1655,10 @@ def make_web_handler(web_key):
                     "Location": "/"})
             if url.path in ("/", "/index.html"):
                 return self._file(os.path.join(WEB_DIR, "index.html"), "text/html; charset=utf-8")
+            if url.path in ("/label", "/label.html"):
+                return self._file(os.path.join(WEB_DIR, "label.html"), "text/html; charset=utf-8")
+            if url.path == "/api/label/queue":
+                return self._send(200, label_queue())
             if url.path == "/api/status":
                 return self._send(200, web_status())
             if url.path == "/api/temperature":
@@ -1377,14 +1698,30 @@ def make_web_handler(web_key):
             if url.path == "/api/mode":
                 set_home() if body.get("mode") == "home" else set_away()
                 return self._send(200, web_status())
+            if url.path == "/api/buzzer":
+                if not buzz(str(body.get("action", "")), "dashboard", body.get("volume")):
+                    return self._send(400, {"error": "Buzzer unavailable, or that action or volume isn't allowed"})
+                time.sleep(0.2)  # let the MQTT round trip finish so the status is current
+                return self._send(200, web_status())
+            if url.path == "/api/label":
+                event_id = str(body.get("id", ""))
+                if not re.fullmatch(r"[\w-]+", event_id):
+                    return self._send(400, {"error": "bad id"})
+                labels = save_label(event_id, body.get("value"))
+                return self._send(200, {"ok": True, "count": len(labels)})
             if url.path == "/api/ask":
                 question = str(body.get("question", "")).strip()[:300]
                 if not question:
                     return self._send(400, {"error": "Type a question"})
+                dry_run = bool(body.get("dry_run"))  # eval_agent.py: actions are checked, not carried out
+                model = str(body.get("model") or "") if dry_run else ""
+                if model and not re.fullmatch(r"[\w.:-]{1,60}", model):
+                    return self._send(400, {"error": "bad model name"})
+                session = re.sub(r"[^\w-]", "", str(body.get("session") or "web"))[:40] or "web"
                 if not ask_lock.acquire(blocking=False):
                     return self._send(429, {"error": "Still answering the previous question"})
                 try:
-                    return self._send(200, ask(question))
+                    return self._send(200, ask_smart(question, session, dry_run, model or None))
                 except Exception as e:
                     print(f"Ask failed: {e}", flush=True)
                     return self._send(500, {"error": f"Couldn't answer: {e}"})
@@ -1445,6 +1782,8 @@ def main():
         print("Heartbeat off (no healthcheck_url in config.json)", flush=True)
     if TEMP_ENABLED:
         threading.Thread(target=temperature_loop, daemon=True).start()
+    if BUZZER_ENABLED:
+        start_buzzer()
     if WEB_ENABLED:
         threading.Thread(target=run_web, args=(topics["web_key"],), daemon=True).start()
     commands = queue.Queue()
@@ -1469,7 +1808,8 @@ def main():
                 seen = f", person {labels['person']:.0%}" if labels else ""
                 print(f"Event: {hit['trigger']} {hit['motion'] * 100:.0f}% of frame{seen}, analyzing...", flush=True)
                 enqueue(mode="auto", trigger=hit["trigger"], frame=frame, faces=hit["faces"],
-                        motion=hit["motion"], labels=labels)
+                        motion=hit["motion"], labels=labels,
+                        timing={"t0": last_event, "detect": round(time.time() - last_event, 2)})
                 watcher.reset()  # the current scene becomes the new background
         except Exception as e:
             print(f"Error: {e}", flush=True)

@@ -4,162 +4,253 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Room Guardian</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #0f1115; --panel: #171a21; --panel-2: #1e222b; --line: #2a2f3a;
-    --text: #e8eaf0; --muted: #9aa1b0; --accent: #5b8cff;
-    --person: #ff5d5d; --suspicious: #ffb020; --motion: #7c8597; --snapshot: #5b8cff; --answer: #b083ff;
-    --armed: #3ccf7a; --home: #5b8cff; --snoozed: #ffb020; --temp: #ff8a3d;
+    --fog: #EDF0F3; --panel: #FFFFFF; --panel-2: #F5F7F9; --ink: #1E2832; --muted: #5B6876; --line: #D7DDE3;
+    --armed: #2E9C6A; --home: #3D6FD6; --snoozed: #D6962A; --alert: #D2453C; --ember: #DD7333; --answer: #7B5CC9;
+    --state: var(--armed);
+    --radius-lg: 22px; --radius: 14px; --radius-sm: 10px;
+    color-scheme: light;
   }
-  @media (prefers-color-scheme: light) {
-    :root { --bg: #f4f5f8; --panel: #ffffff; --panel-2: #f0f2f6; --line: #dfe3ea; --text: #161a22; --muted: #5d6676; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --fog: #131A21; --panel: #1A232C; --panel-2: #212C36; --ink: #E4E9EE; --muted: #9AA7B4; --line: #2C3843;
+      --armed: #43B784; --home: #6C93EA; --snoozed: #E2AA45; --alert: #E7665D; --ember: #EE8C4E; --answer: #A58BEA;
+      color-scheme: dark;
+    }
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
-  body { margin: 0; background: var(--bg); color: var(--text);
-         font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-  header { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 88%, transparent);
-           backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
-  .bar { max-width: 1100px; margin: 0 auto; padding: 12px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-  h1 { font-size: 18px; margin: 0; letter-spacing: .2px; }
-  h1 span { color: var(--muted); font-weight: 500; }
-  .pill { display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px; border-radius: 999px;
-          background: var(--panel-2); border: 1px solid var(--line); font-weight: 600; font-size: 13px; }
-  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--armed); box-shadow: 0 0 0 4px color-mix(in srgb, var(--armed) 25%, transparent); }
-  .spacer { flex: 1; }
-  button, select, input[type=date] { font: inherit; color: var(--text); background: var(--panel-2);
-          border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; cursor: pointer; }
-  button:hover { border-color: var(--accent); }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
-  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
-  .seg button { border: 0; border-radius: 0; background: var(--panel-2); }
-  .seg button.on { background: var(--accent); color: #fff; font-weight: 600; }
-  main { max-width: 1100px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
-  .top { display: grid; grid-template-columns: 1fr 1.3fr; gap: 16px; align-items: start; }
-  @media (max-width: 760px) { .top { grid-template-columns: 1fr; } }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
-  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 10px; }
-  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-  .stat { background: var(--panel-2); border-radius: 10px; padding: 10px 12px; }
-  .stat b { display: block; font-size: 26px; line-height: 1.1; }
-  .stat small { color: var(--muted); }
-  .meta { color: var(--muted); font-size: 13px; margin-top: 10px; }
-  .temp { margin-top: 10px; background: var(--panel-2); border-radius: 10px; padding: 10px 12px; }
-  .temp-now { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-  .temp-now b { font-size: 26px; line-height: 1.1; }
-  .temp-now small { color: var(--muted); }
-  #t-chart { width: 100%; height: 64px; display: block; margin-top: 6px; }
-  .temp-range { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 2px 12px; color: var(--muted); font-size: 12px; }
-  .live { position: relative; aspect-ratio: 4/3; background: #000; border-radius: 10px; overflow: hidden; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--fog); color: var(--ink);
+         font: 16px/1.5 "Schibsted Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+         font-variant-numeric: tabular-nums; }
+  button, select, input { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--home); outline-offset: 2px; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
+
+  /* Header */
+  header { padding: 18px 0 6px; }
+  .bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .brand { font-weight: 700; font-size: 18px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 10px; }
+  .brand-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--state); box-shadow: 0 0 0 4px color-mix(in srgb, var(--state) 22%, transparent); }
+  .btn { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 8px 15px; cursor: pointer;
+         text-decoration: none; color: var(--ink); display: inline-flex; align-items: center; gap: 6px; font-weight: 500; line-height: 1.2; }
+  .btn:hover { border-color: var(--muted); }
+  .btn.primary { background: var(--ink); color: var(--fog); border-color: var(--ink); }
+  .btn.primary:hover { opacity: .9; }
+  .btn:disabled { opacity: .5; cursor: wait; }
+  .seg { display: inline-flex; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 3px; }
+  .seg button { border: 0; background: none; border-radius: 999px; padding: 6px 14px; cursor: pointer; font-weight: 500; color: var(--muted); white-space: nowrap; }
+  .seg button.on { background: var(--state); color: #fff; }
+  select.btn { appearance: none; padding-right: 15px; }
+
+  /* Status pill */
+  .pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 999px; background: var(--panel);
+          border: 1px solid var(--line); font-weight: 600; font-size: 14px; margin-right: auto; }
+  .pill .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--state); box-shadow: 0 0 0 4px color-mix(in srgb, var(--state) 22%, transparent); }
+
+  /* Today + live view */
+  .top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 20px; align-items: start; padding-top: 14px; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
+  .stat { background: var(--panel-2); border-radius: var(--radius); padding: 12px 14px; }
+  .stat b { display: block; font-size: 30px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; }
+  .stat span { color: var(--muted); font-size: 14px; }
+  .temp { margin-top: 12px; background: var(--panel-2); border-radius: var(--radius); padding: 14px; }
+  .live { position: relative; aspect-ratio: 4/3; background: #0E141A; border-radius: var(--radius); overflow: hidden;
+          margin-top: 12px; outline: 3px solid var(--state); outline-offset: -3px; }
   .live img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .live .off { position: absolute; inset: 0; display: grid; place-items: center; color: #aab; font-size: 14px; }
-  .live .tag { position: absolute; top: 8px; left: 8px; background: #e5383b; color: #fff; font-size: 11px;
-               font-weight: 700; padding: 2px 8px; border-radius: 6px; letter-spacing: .06em; }
-  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
-  .filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-  .chip { border-radius: 999px; padding: 6px 14px; }
-  .chip.on { background: var(--text); color: var(--bg); border-color: var(--text); font-weight: 600; }
-  .day-h { margin: 18px 0 8px; font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
-  .ev { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; cursor: pointer;
-        transition: transform .12s ease, border-color .12s ease; border-top: 3px solid var(--k, var(--motion)); }
-  .ev:hover { transform: translateY(-2px); border-color: var(--k, var(--accent)); }
-  .ev .ph { aspect-ratio: 4/3; background: var(--panel-2); display: grid; place-items: center; color: var(--muted); font-size: 13px; }
-  .ev img { width: 100%; aspect-ratio: 4/3; object-fit: cover; display: block; }
-  .ev .body { padding: 10px 12px 12px; }
-  .top-line { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 4px; }
-  .badge { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--k); }
-  .time { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
-  .desc { margin: 0; font-size: 14px; }
-  .empty { text-align: center; color: var(--muted); padding: 40px 0; }
-  dialog { border: 0; border-radius: 14px; padding: 0; max-width: min(960px, 94vw); background: var(--panel); color: var(--text); }
-  dialog::backdrop { background: rgba(0,0,0,.7); }
-  dialog img { width: 100%; display: block; }
-  dialog .body { padding: 14px 16px; }
-  dialog .close { position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,.6); color: #fff; border: 0; }
-  .temp-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
-  .seg.small button { padding: 3px 10px; font-size: 12px; white-space: nowrap; }
-  .ask .chat { display: flex; flex-direction: column; gap: 10px; max-height: 420px; overflow-y: auto; margin-bottom: 10px; }
-  .ask .chat:empty { display: none; }
-  .msg { max-width: 85%; padding: 9px 13px; border-radius: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .msg.q { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
-  .msg.a { align-self: flex-start; background: var(--panel-2); border-bottom-left-radius: 4px; }
-  .msg.err { color: var(--person); }
-  .msg .meta { margin-top: 6px; font-size: 12px; }
-  .msg .shot { margin-top: 8px; width: min(320px, 100%); border-radius: 8px; display: block; cursor: pointer; }
-  .rel { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
-  .rel button { padding: 0; border: 2px solid var(--k, var(--line)); border-radius: 8px; overflow: hidden; width: 92px; background: none; }
+  .live .off { position: absolute; inset: 0; display: grid; place-items: center; color: #9AA7B4; font-size: 15px; }
+  .live .tag { position: absolute; top: 12px; left: 12px; background: var(--alert); color: #fff; font-size: 13px; font-weight: 600;
+               padding: 3px 11px; border-radius: 999px; display: inline-flex; align-items: center; gap: 6px; }
+  .live .tag i { width: 7px; height: 7px; border-radius: 50%; background: #fff; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  .row .note { color: var(--muted); font-size: 14px; }
+  .vol { display: flex; align-items: center; gap: 10px; width: 100%; }
+  .vol label { color: var(--muted); font-size: 14px; }
+  .vol input[type=range] { flex: 1; max-width: 260px; accent-color: var(--ink); }
+  .vol output { font-weight: 600; min-width: 3.5ch; text-align: right; }
+
+  /* Panels */
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 22px; }
+  .panel h2 { font-size: 20px; margin: 0 0 4px; letter-spacing: -0.01em; font-weight: 650; }
+  .panel .hint { color: var(--muted); font-size: 14px; margin: 0 0 16px; }
+
+  /* Ask */
+  .ask { margin-top: 20px; }
+  .chat { display: flex; flex-direction: column; gap: 12px; max-height: 460px; overflow-y: auto; margin-bottom: 14px; padding-right: 2px; }
+  .chat:empty { display: none; }
+  .msg { max-width: 88%; padding: 11px 15px; border-radius: 18px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg.q { align-self: flex-end; background: var(--ink); color: var(--fog); border-bottom-right-radius: 6px; }
+  .msg.a { align-self: flex-start; background: var(--panel-2); border-bottom-left-radius: 6px; }
+  .msg.err { color: var(--alert); }
+  .msg.thinking { color: var(--muted); }
+  .msg .shot { margin-top: 10px; width: min(300px, 100%); border-radius: var(--radius-sm); display: block; cursor: zoom-in; }
+  .steps { list-style: none; margin: 10px 0 0; padding: 10px 0 0; border-top: 1px solid var(--line); font-size: 14px; display: grid; gap: 4px; white-space: normal; }
+  .steps li { display: flex; gap: 8px; align-items: baseline; }
+  .steps .mark { width: 16px; flex: none; text-align: center; font-weight: 700; }
+  .steps .done .mark { color: var(--armed); }
+  .steps .wait .mark { color: var(--snoozed); }
+  .steps .no .mark { color: var(--alert); }
+  .steps .test .mark { color: var(--answer); }
+  .steps .why { color: var(--muted); }
+  .msg .meta { margin-top: 8px; font-size: 13px; color: var(--muted); white-space: normal; }
+  .confirm { display: flex; gap: 8px; margin-top: 10px; }
+  .rel { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .rel button { padding: 0; border: 2px solid var(--k, var(--line)); border-radius: 10px; overflow: hidden; width: 84px; background: none; cursor: zoom-in; }
   .rel img { width: 100%; aspect-ratio: 4/3; object-fit: cover; display: block; }
-  .rel .noimg { display: grid; place-items: center; aspect-ratio: 4/3; font-size: 11px; color: var(--muted); }
-  .thinking::after { content: ""; display: inline-block; width: 8px; height: 8px; margin-left: 8px; border-radius: 50%;
-                     background: var(--answer); animation: pulse 1s ease-in-out infinite; }
-  @keyframes pulse { 50% { opacity: .2; } }
-  .sugs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
-  .sug { border-radius: 999px; padding: 5px 12px; font-size: 13px; }
+  .rel .noimg { display: grid; place-items: center; aspect-ratio: 4/3; font-size: 12px; color: var(--muted); }
+  .sugs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .sug { border: 1px dashed var(--line); background: none; border-radius: 999px; padding: 6px 13px; cursor: pointer; font-size: 14px; color: var(--muted); }
+  .sug:hover { color: var(--ink); border-style: solid; }
   .ask-row { display: flex; gap: 8px; }
-  .ask-row input { flex: 1; min-width: 0; font: inherit; color: var(--text); background: var(--panel-2);
-                   border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; }
-  .ask-row input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-  button:disabled { opacity: .55; cursor: wait; }
-  #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(20px); background: var(--text);
-           color: var(--bg); padding: 10px 16px; border-radius: 10px; font-weight: 600; z-index: 9;
-           opacity: 0; visibility: hidden; transition: opacity .2s ease, transform .2s ease, visibility .2s; }
-  #toast.show { transform: translateX(-50%) translateY(0); opacity: 1; visibility: visible; }
+  .ask-row input { flex: 1; min-width: 0; background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px; padding: 11px 16px; }
+
+  /* Temperature */
+  .temp-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+  .temp-now { font-size: 34px; font-weight: 600; letter-spacing: -0.03em; line-height: 1; color: var(--ember); }
+  .temp-sub { color: var(--muted); font-size: 14px; margin-top: 6px; }
+  .seg.small button { padding: 4px 11px; font-size: 14px; }
+  .seg.small button.on { background: var(--ink); color: var(--fog); }
+  #t-chart { width: 100%; height: 110px; display: block; margin: 14px 0 4px; overflow: visible; }
+  .t-axis { display: flex; justify-content: space-between; color: var(--muted); font-size: 13px; margin-bottom: 12px; }
+  .temp-facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 0; }
+  .temp-facts div { background: var(--panel); border-radius: var(--radius-sm); padding: 8px 12px; }
+  .temp-facts dt { color: var(--muted); font-size: 13px; }
+  .temp-facts dd { margin: 0; font-weight: 600; }
+  .cpu { color: var(--muted); font-size: 14px; margin-top: 12px; }
+
+  /* Timeline */
+  .timeline-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 0 0 6px; }
+  .events { margin-top: 20px; }
+  .timeline-head h2 { margin: 0 auto 0 0; }
+  .chip { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 6px 14px; cursor: pointer; font-weight: 500; }
+  .chip.on { background: var(--ink); color: var(--fog); border-color: var(--ink); }
+  input[type=date].btn { padding: 6px 12px; }
+  .day { margin-top: 26px; }
+  .day h3 { font-size: 15px; font-weight: 600; color: var(--muted); margin: 0 0 8px; }
+  .rail { list-style: none; margin: 0; padding: 0; position: relative; }
+  .rail::before { content: ""; position: absolute; left: 88px; top: 8px; bottom: 8px; width: 2px; background: var(--line); }
+  .ev { display: grid; grid-template-columns: 64px 26px 132px 1fr; gap: 12px; align-items: center; padding: 8px 0; cursor: pointer; border-radius: var(--radius); }
+  .ev:hover .ev-photo, .ev:focus-visible .ev-photo { outline: 2px solid var(--k); outline-offset: 2px; }
+  .ev-time { text-align: right; color: var(--muted); font-size: 14px; }
+  .ev-dot { width: 14px; height: 14px; border-radius: 50%; background: var(--k); justify-self: center; position: relative; z-index: 1;
+            box-shadow: 0 0 0 4px var(--fog); }
+  .ev-photo { width: 132px; aspect-ratio: 4/3; border-radius: var(--radius-sm); object-fit: cover; background: var(--panel-2); display: block; }
+  .ev-photo.none { display: grid; place-items: center; color: var(--muted); font-size: 12px; text-align: center; }
+  .ev-kind { font-weight: 600; color: var(--k); font-size: 14px; }
+  .ev-desc { margin: 2px 0 0; max-width: 60ch; }
+  .empty { color: var(--muted); padding: 30px 0; }
+  .more { margin: 14px 0 0 88px; }
+
+  /* Dialog + toast */
+  dialog { border: 0; border-radius: var(--radius-lg); padding: 0; max-width: min(920px, 94vw); background: var(--panel); color: var(--ink); overflow: hidden; }
+  dialog::backdrop { background: rgba(10, 15, 20, .72); }
+  dialog img { width: 100%; display: block; }
+  dialog .body { padding: 16px 20px 20px; }
+  dialog .close { position: absolute; top: 12px; right: 12px; background: rgba(14,20,26,.7); color: #fff; border: 0; border-radius: 999px; width: 36px; height: 36px; cursor: pointer; font-size: 16px; }
+  .dlg-kind { font-weight: 600; }
+  .dlg-time { color: var(--muted); }
+  #toast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 16px); background: var(--ink); color: var(--fog);
+           padding: 11px 18px; border-radius: 999px; font-weight: 500; opacity: 0; visibility: hidden; transition: opacity .2s, transform .2s, visibility .2s; z-index: 9; }
+  #toast.show { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
+  footer { color: var(--muted); font-size: 13px; padding: 40px 0 30px; }
+
+  @media (max-width: 860px) {
+    .top { grid-template-columns: minmax(0, 1fr); }
+  }
+  @media (max-width: 560px) {
+    .wrap { padding: 0 16px; }
+    .brand { width: 100%; margin-right: 0; }
+    .ev { grid-template-columns: 50px 22px 96px 1fr; gap: 8px; }
+    .rail::before { left: 68px; }
+    .ev-photo { width: 96px; }
+    .ev-desc { font-size: 15px; }
+    .more { margin-left: 68px; }
+    .temp-facts { grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+    .stat b { font-size: 26px; }
+    .panel { padding: 18px; }
+    .temp-top { flex-wrap: wrap; }
+  }
 </style>
 </head>
 <body>
 <header>
-  <div class="bar">
-    <h1>Room Guardian <span>timeline</span></h1>
-    <span class="pill"><span class="dot" id="dot"></span><span id="mode-text">Loading…</span></span>
-    <div class="spacer"></div>
-    <div class="seg" role="group" aria-label="Presence">
+  <div class="wrap bar">
+    <div class="brand">Room Guardian</div>
+    <span class="pill"><span class="dot" aria-hidden="true"></span><span id="mode-text">Connecting to the Pi</span></span>
+    <div class="seg" role="group" aria-label="Mode">
       <button id="btn-away">Away</button><button id="btn-home">Home</button>
     </div>
-    <select id="snooze" aria-label="Snooze">
-      <option value="">Snooze…</option><option value="30">30 min</option><option value="60">1 hour</option>
-      <option value="240">4 hours</option><option value="0">Resume alerts</option>
+    <select id="snooze" class="btn" aria-label="Snooze alerts">
+      <option value="">Snooze alerts</option><option value="30">For 30 minutes</option><option value="60">For 1 hour</option>
+      <option value="240">For 4 hours</option><option value="0">Resume alerts</option>
     </select>
-    <button class="primary" id="btn-snap">📸 Snapshot</button>
+    <a href="/label" class="btn" title="Label photos for the accuracy report">Label photos</a>
+    <button class="btn primary" id="btn-snap">Take snapshot</button>
   </div>
 </header>
 
-<main>
+<main class="wrap">
   <section class="top">
-    <div class="card">
+    <div class="panel">
       <h2>Today</h2>
       <div class="stats">
-        <div class="stat"><b id="s-events">–</b><small>motion events</small></div>
-        <div class="stat"><b id="s-people">–</b><small>people</small></div>
-        <div class="stat"><b id="s-susp">–</b><small>suspicious</small></div>
+        <div class="stat"><b id="s-events">–</b><span>motion events</span></div>
+        <div class="stat"><b id="s-people">–</b><span>with people</span></div>
+        <div class="stat"><b id="s-susp">–</b><span>suspicious</span></div>
       </div>
       <div class="temp">
-        <div class="temp-head">
-          <div class="temp-now"><b id="t-now">–</b><small id="t-sub">No sensor reading</small></div>
-          <div class="seg small" role="group" aria-label="Temperature range">
-            <button class="on" data-h="24">24 h</button><button data-h="168">7 d</button>
+        <div class="temp-top">
+          <div>
+            <div class="temp-now" id="t-now">–</div>
+            <div class="temp-sub" id="t-sub">No sensor reading</div>
+          </div>
+          <div class="seg small" role="group" aria-label="Chart range">
+            <button class="on" data-h="24">24 h</button><button data-h="168">7 days</button>
           </div>
         </div>
-        <svg id="t-chart" viewBox="0 0 300 64" preserveAspectRatio="none" aria-label="Room temperature chart"></svg>
-        <div class="temp-range"><span id="t-min"></span><span id="t-label">last 24 h</span><span id="t-max"></span></div>
-        <div class="temp-range"><span id="t-avg"></span><span id="t-cpu"></span></div>
+        <svg id="t-chart" viewBox="0 0 400 110" preserveAspectRatio="none" role="img" aria-label="Room temperature chart"></svg>
+        <div class="t-axis"><span id="t-from">24 hours ago</span><span>Now</span></div>
+        <dl class="temp-facts">
+          <div><dt>Low</dt><dd id="t-min">–</dd></div>
+          <div><dt>High</dt><dd id="t-max">–</dd></div>
+          <div><dt>Average</dt><dd id="t-avg">–</dd></div>
+        </dl>
+        <div class="cpu" id="t-cpu"></div>
       </div>
-      <div class="meta" id="meta">…</div>
+      <p class="hint" id="meta" style="margin: 12px 0 0">&nbsp;</p>
     </div>
-    <div class="card">
+
+    <div class="panel">
       <h2>Live view</h2>
       <div class="live">
         <img id="live-img" alt="Live camera view" hidden>
         <div class="off" id="live-off">Live view is off</div>
-        <span class="tag" id="live-tag" hidden>LIVE</span>
+        <span class="tag" id="live-tag" hidden><i></i>Live</span>
       </div>
-      <div class="row"><button id="btn-live">▶ Start live view</button>
-        <span class="meta" style="margin:0">Refreshes about once a second while open</span></div>
+      <div class="row"><button class="btn" id="btn-live">Start live view</button>
+        <span class="note">Refreshes about once a second while open</span></div>
+      <div class="row" id="buzz-row" hidden>
+        <span class="note">Buzzer</span>
+        <button class="btn" data-buzz="beep">Beep</button><button class="btn" data-buzz="alarm">Sound alarm</button><button class="btn" data-buzz="off">Stop</button>
+        <span class="note" id="buzz-state"></span>
+        <div class="vol">
+          <label for="buzz-vol">Volume</label>
+          <input type="range" id="buzz-vol" min="5" max="100" step="5" value="60">
+          <output id="buzz-vol-val" for="buzz-vol">60%</output>
+          <span class="note">plays a beep when you let go</span>
+        </div>
+      </div>
     </div>
   </section>
 
-  <section class="card ask">
+  <section class="panel ask">
     <h2>Ask Guardian</h2>
+    <p class="hint">Ask what happened, or tell it to beep, arm, snooze or take a photo. Disarming and snoozing ask you first. Answers can take 10–40 s.</p>
     <div class="chat" id="chat" aria-live="polite"></div>
     <div class="sugs">
       <button class="sug">Summarize this week</button>
@@ -167,152 +258,208 @@
       <button class="sug">When did someone last come in?</button>
       <button class="sug">How hot did it get today?</button>
       <button class="sug">What's in the room right now?</button>
+      <button class="sug">Sound a beep</button>
+      <button class="sug">Snooze alerts for 30 minutes</button>
     </div>
     <form class="ask-row" id="ask-form">
-      <input id="ask-q" maxlength="300" autocomplete="off" placeholder="Ask about events, temperature, or the room right now…">
-      <button class="primary" id="ask-btn">Ask</button>
+      <input id="ask-q" maxlength="300" autocomplete="off" placeholder="Ask a question or give a command" aria-label="Question or command">
+      <button class="btn primary" id="ask-btn">Ask</button>
     </form>
-    <div class="meta">Answered on the Pi from the event log, the temperature sensor and the camera. Summaries can take 10–30 s.</div>
   </section>
 
-  <section class="card">
-    <div class="filters">
-      <button class="chip on" data-f="all">All</button>
+  <section class="panel events">
+    <div class="timeline-head">
+      <h2>What happened</h2>
+      <button class="chip on" data-f="all">Everything</button>
       <button class="chip" data-f="people">People</button>
       <button class="chip" data-f="suspicious">Suspicious</button>
       <button class="chip" data-f="alerts">Alerts</button>
-      <div class="spacer"></div>
-      <input type="date" id="day" aria-label="Day">
-      <button id="btn-today">Today</button>
-      <button id="btn-alldays">All days</button>
+      <input type="date" id="day" class="btn" aria-label="Show one day">
+      <button class="btn" id="btn-today">Today</button>
+      <button class="btn" id="btn-alldays">All days</button>
     </div>
     <div id="timeline"></div>
   </section>
+
 </main>
 
 <dialog id="dlg">
-  <button class="close" onclick="dlg.close()">✕</button>
+  <button class="close" onclick="dlg.close()" aria-label="Close">✕</button>
   <img id="dlg-img" alt="">
-  <div class="body"><div class="top-line"><span class="badge" id="dlg-badge"></span><span class="time" id="dlg-time"></span></div>
-    <p class="desc" id="dlg-desc"></p><div class="meta" id="dlg-meta"></div></div>
+  <div class="body"><span class="dlg-kind" id="dlg-kind"></span> <span class="dlg-time" id="dlg-time"></span>
+    <p id="dlg-desc"></p><div class="dlg-time" id="dlg-meta"></div></div>
 </dialog>
-<div id="toast"></div>
+<div id="toast" role="status"></div>
 
 <script>
 const KIND = {
-  person:     {label: "Person spotted", color: "var(--person)"},
-  suspicious: {label: "Suspicious",     color: "var(--suspicious)"},
-  motion:     {label: "Motion",         color: "var(--motion)"},
-  snapshot:   {label: "Snapshot",       color: "var(--snapshot)"},
-  answer:     {label: "Question",       color: "var(--answer)"},
+  person:     {label: "Person",     color: "var(--alert)"},
+  suspicious: {label: "Suspicious", color: "var(--snoozed)"},
+  motion:     {label: "Motion",     color: "var(--muted)"},
+  snapshot:   {label: "Snapshot",   color: "var(--home)"},
+  answer:     {label: "Question",   color: "var(--answer)"},
 };
-let filter = "all", day = "", liveTimer = null, tempHours = 24;
+const TOOL = {  // how the agent's tool calls read to a person
+  get_events: a => `Checked events${a.period ? ", " + a.period : ""}`,
+  get_temperature: a => `Checked the temperature${a.period ? ", " + a.period : ""}`,
+  get_status: () => "Checked the current settings",
+  look_at_room: () => "Looked at the room",
+  sound_buzzer: a => a.pattern === "off" ? "Turned the buzzer off" : `Sounded the buzzer (${a.pattern || "?"})`,
+  set_mode: a => a.mode === "home" ? "Disarm (home mode)" : "Arm (away mode)",
+  snooze_alerts: a => a.minutes ? `Snooze alerts for ${a.minutes} minutes` : "Resume alerts",
+  take_snapshot: () => "Take a snapshot",
+};
+let filter = "all", day = "", liveTimer = null, tempHours = 24, shown = 20, volDragging = false;
 const $ = id => document.getElementById(id);
+const cToF = c => Math.round((c * 9 / 5 + 32) * 10) / 10;
+const fmtTime = iso => new Date(iso).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
+const fmtDay = iso => new Date(iso).toLocaleDateString([], {weekday: "long", month: "long", day: "numeric"});
+const clock = hhmm => { const [h, m] = hhmm.split(":").map(Number); const d = new Date(); d.setHours(h, m); return fmtTime(d); };
 
 async function api(path, body) {
   const opts = body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)};
   const r = await fetch(path, opts);
-  if (r.status === 401) { document.body.innerHTML = "<p style='padding:24px'>Session expired: open the link with ?key=… again.</p>"; throw new Error("401"); }
+  if (r.status === 401) { document.body.innerHTML = "<p style='padding:24px'>Session expired. Open the dashboard link with ?key=… again.</p>"; throw new Error("401"); }
   return r.json();
 }
-function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 2200); }
-const fmtTime = iso => new Date(iso).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
-const fmtDay = iso => new Date(iso).toLocaleDateString([], {weekday: "long", month: "short", day: "numeric"});
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), 2400); }
 
+// Status: pill, state colour, today's numbers, temperature, buzzer
 function renderStatus(s) {
-  const snoozed = !!s.snoozed_until;
-  $("mode-text").textContent = snoozed ? `Snoozed until ${s.snoozed_until}` :
-    s.mode === "home" ? "Home · motion ignored" : `Away · armed since ${s.away_since}`;
-  $("dot").style.background = snoozed ? "var(--snoozed)" : s.mode === "home" ? "var(--home)" : "var(--armed)";
-  $("btn-away").classList.toggle("on", s.mode === "away");
-  $("btn-home").classList.toggle("on", s.mode === "home");
+  const snoozed = !!s.snoozed_until, home = s.mode === "home";
+  const state = snoozed ? "snoozed" : home ? "home" : "armed";
+  document.documentElement.style.setProperty("--state", `var(--${state})`);
+  const since = s.away_since ? s.away_since.split(" ") : null;  // "Thu 09:12"
+  const today = new Date().toLocaleDateString("en-US", {weekday: "short"});
+  $("mode-text").textContent = snoozed ? `Snoozed until ${clock(s.snoozed_until)}`
+    : home ? "Home, motion alerts off"
+    : `Armed since ${since ? (since[0] === today ? clock(since[1]) : `${since[0]} ${clock(since[1])}`) : "now"}`;
+  $("btn-away").classList.toggle("on", !home);
+  $("btn-home").classList.toggle("on", home);
   $("s-events").textContent = s.today.events;
   $("s-people").textContent = s.today.people;
   $("s-susp").textContent = s.today.suspicious;
   const t = s.temperature;
   $("t-now").textContent = t ? `${t.f}°F` : "–";
-  $("t-sub").textContent = t ? `${t.c}°C · ${t.humidity}% humidity${t.age_s > 300 ? ` · ${Math.round(t.age_s / 60)} min old` : ""}`
-                             : "No sensor reading";
-  $("t-cpu").textContent = s.cpu_c != null ? `Pi CPU ${cToF(s.cpu_c)}°F (${s.cpu_c}°C)` : "";
-  $("meta").textContent = [
-    s.last_event ? `Last event ${s.last_event}` : "No events yet today",
-    s.person_detector ? "Person detector on" : "Person detector off",
-    s.queue ? `${s.queue} event(s) being analyzed` : null,
-  ].filter(Boolean).join(" · ");
+  $("t-sub").textContent = t ? `${t.c}°C and ${t.humidity}% humidity${t.age_s > 300 ? `, read ${Math.round(t.age_s / 60)} min ago` : ""}` : "No sensor reading";
+  $("t-cpu").textContent = s.cpu_c != null ? `The Pi's processor is at ${cToF(s.cpu_c)}°F (${s.cpu_c}°C).` : "";
+  const b = s.buzzer;
+  $("buzz-row").hidden = !b;
+  if (b) {
+    $("buzz-state").textContent = b.state !== "off" ? `Sounding: ${b.state}`
+      : b.action === "volume" ? `Volume set from ${b.source}${b.latency_ms != null ? `, ${b.latency_ms} ms over MQTT` : ""}`
+      : b.action ? `Last: ${b.action} from ${b.source}${b.latency_ms != null ? `, ${b.latency_ms} ms over MQTT` : ""}` : "";
+    if (b.volume != null && !volDragging) { $("buzz-vol").value = Math.round(b.volume * 100); $("buzz-vol-val").textContent = `${Math.round(b.volume * 100)}%`; }
+  }
+  $("meta").textContent = [s.last_event ? `Last motion at ${clock(s.last_event)}.` : "No motion so far today.",
+    s.queue ? `${s.queue} event${s.queue > 1 ? "s" : ""} still being analyzed.` : "",
+    `Person detector ${s.person_detector ? "on" : "off"}.`].filter(Boolean).join(" ");
 }
 
-function card(e) {
+// Timeline as a vertical rail, grouped by day
+function evRow(e) {
   const k = KIND[e.kind] || KIND.motion;
-  const el = document.createElement("article");
-  el.className = "ev"; el.style.setProperty("--k", k.color);
-  el.innerHTML = e.image ? `<img loading="lazy" alt="">` : `<div class="ph">Photo no longer stored</div>`;
-  if (e.image) el.querySelector("img").src = `/thumbs/${encodeURIComponent(e.image)}`;
-  const body = document.createElement("div"); body.className = "body";
-  body.innerHTML = `<div class="top-line"><span class="badge"></span><span class="time"></span></div><p class="desc"></p>`;
-  body.querySelector(".badge").textContent = k.label;
-  body.querySelector(".time").textContent = fmtTime(e.time);
-  body.querySelector(".desc").textContent = e.description || e.reason || "—";
-  el.appendChild(body);
-  el.onclick = () => openEvent(e);
-  return el;
+  const li = document.createElement("li");
+  li.className = "ev"; li.tabIndex = 0; li.style.setProperty("--k", k.color);
+  li.innerHTML = `<span class="ev-time"></span><span class="ev-dot"></span>` +
+    (e.image ? `<img class="ev-photo" loading="lazy" alt="">` : `<span class="ev-photo none">No photo kept</span>`) +
+    `<div><div class="ev-kind"></div><p class="ev-desc"></p></div>`;
+  li.querySelector(".ev-time").textContent = fmtTime(e.time);
+  if (e.image) li.querySelector("img").src = `/thumbs/${encodeURIComponent(e.image)}`;
+  li.querySelector(".ev-kind").textContent = k.label + (e.alert && e.kind !== "snapshot" && e.kind !== "answer" ? ", alert sent" : "");
+  li.querySelector(".ev-desc").textContent = e.description || e.reason || "No description";
+  li.onclick = () => openEvent(e);
+  li.onkeydown = ev => { if (ev.key === "Enter") openEvent(e); };
+  return li;
 }
-
 function openEvent(e) {
   const k = KIND[e.kind] || KIND.motion;
-  $("dlg-img").src = e.image ? `/photos/${encodeURIComponent(e.image)}` : "";
   $("dlg-img").hidden = !e.image;
-  $("dlg-badge").textContent = k.label; $("dlg-badge").style.color = k.color;
+  if (e.image) $("dlg-img").src = `/photos/${encodeURIComponent(e.image)}`;
+  $("dlg-kind").textContent = k.label; $("dlg-kind").style.color = k.color;
   $("dlg-time").textContent = `${fmtDay(e.time)}, ${fmtTime(e.time)}`;
-  $("dlg-desc").textContent = e.description || "—";
-  const conf = e.labels && e.labels.person ? ` · person detector ${Math.round(e.labels.person * 100)}%` : "";
-  $("dlg-meta").textContent = `${e.reason || ""}${conf}`;
+  $("dlg-desc").textContent = e.description || "No description";
+  const conf = e.labels && e.labels.person ? `Person detector ${Math.round(e.labels.person * 100)}% sure.` : "";
+  $("dlg-meta").textContent = [e.reason, conf].filter(Boolean).join(". ");
   $("dlg").showModal();
 }
-
 async function loadEvents() {
   const events = await api(`/api/events?filter=${filter}${day ? `&day=${day}` : ""}`);
   const tl = $("timeline"); tl.innerHTML = "";
-  if (!events.length) { tl.innerHTML = `<div class="empty">No events ${day ? "on this day" : "yet"} for this filter.</div>`; return; }
-  let currentDay = null, grid = null;
-  for (const e of events) {
+  if (!events.length) {
+    tl.innerHTML = `<p class="empty">${filter === "all" ? "Nothing recorded" : "Nothing matches this filter"}${day ? " on this day" : " yet"}. Events appear here when the camera sees motion while you're away.</p>`;
+    return;
+  }
+  const todayLabel = fmtDay(new Date().toISOString());
+  let current = null, rail = null;
+  for (const e of events.slice(0, shown)) {
     const d = fmtDay(e.time);
-    if (d !== currentDay) {
-      currentDay = d;
-      const h = document.createElement("div"); h.className = "day-h"; h.textContent = d; tl.appendChild(h);
-      grid = document.createElement("div"); grid.className = "grid"; tl.appendChild(grid);
+    if (d !== current) {
+      current = d;
+      const sec = document.createElement("div"); sec.className = "day";
+      const h = document.createElement("h3"); h.textContent = d === todayLabel ? `Today, ${d}` : d;
+      rail = document.createElement("ul"); rail.className = "rail";
+      sec.append(h, rail); tl.appendChild(sec);
     }
-    grid.appendChild(card(e));
+    rail.appendChild(evRow(e));
+  }
+  if (events.length > shown) {
+    const more = document.createElement("button"); more.className = "btn more";
+    more.textContent = `Show ${Math.min(20, events.length - shown)} more`;
+    more.onclick = () => { shown += 20; loadEvents(); };
+    tl.appendChild(more);
   }
 }
 
-const cToF = c => Math.round((c * 9 / 5 + 32) * 10) / 10;
+// Temperature chart with low/high guides
 async function loadTemp() {
   const pts = (await api(`/api/temperature?hours=${tempHours}`)).sort((a, b) => a.t - b.t);
-  const svg = $("t-chart"), label = tempHours === 24 ? "last 24 h" : "last 7 days";
+  const svg = $("t-chart");
   if (pts.length < 2) {
-    svg.innerHTML = ""; $("t-min").textContent = $("t-max").textContent = $("t-avg").textContent = "";
-    $("t-label").textContent = "chart appears after a few readings"; return;
+    svg.innerHTML = `<text x="200" y="60" text-anchor="middle" font-size="13" fill="var(--muted)">The chart fills in as readings are logged (every 10 minutes)</text>`;
+    $("t-min").textContent = $("t-max").textContent = $("t-avg").textContent = "–"; return;
   }
-  const fs = pts.map(p => cToF(p.c)), lo = Math.min(...fs), hi = Math.max(...fs), span = Math.max(hi - lo, 1);
-  const t0 = pts[0].t, dt = Math.max(pts[pts.length - 1].t - t0, 1);
-  const xs = pts.map(p => 2 + (p.t - t0) / dt * 296), ys = fs.map(f => 58 - (f - lo) / span * 52);
-  const line = xs.map((x, i) => `${x.toFixed(1)},${ys[i].toFixed(1)}`).join(" ");
+  const fs = pts.map(p => cToF(p.c)), lo = Math.min(...fs), hi = Math.max(...fs), pad = Math.max((hi - lo) * 0.15, 0.5);
+  const y0 = lo - pad, y1 = hi + pad, t0 = pts[0].t, dt = Math.max(pts.at(-1).t - t0, 1);
+  const X = t => (t - t0) / dt * 400, Y = f => 102 - (f - y0) / (y1 - y0) * 94;
+  const line = pts.map((p, i) => `${X(p.t).toFixed(1)},${Y(fs[i]).toFixed(1)}`).join(" ");
   svg.innerHTML =
-    `<polygon points="${xs[0].toFixed(1)},64 ${line} ${xs[xs.length - 1].toFixed(1)},64" fill="var(--temp)" opacity=".15"/>` +
-    `<polyline points="${line}" fill="none" stroke="var(--temp)" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
-  $("t-min").textContent = `low ${lo}°F`; $("t-max").textContent = `high ${hi}°F`; $("t-label").textContent = label;
+    `<line x1="0" x2="400" y1="${Y(hi)}" y2="${Y(hi)}" stroke="var(--line)" stroke-dasharray="3 4" vector-effect="non-scaling-stroke"/>` +
+    `<line x1="0" x2="400" y1="${Y(lo)}" y2="${Y(lo)}" stroke="var(--line)" stroke-dasharray="3 4" vector-effect="non-scaling-stroke"/>` +
+    `<polygon points="0,110 ${line} 400,110" fill="var(--ember)" opacity=".12"/>` +
+    `<polyline points="${line}" fill="none" stroke="var(--ember)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>`;
   const avg = fs.reduce((a, b) => a + b, 0) / fs.length, hs = pts.map(p => p.h);
-  $("t-avg").textContent = `avg ${avg.toFixed(1)}°F · humidity ${Math.min(...hs)}–${Math.max(...hs)}%`;
+  $("t-from").textContent = new Date(t0 * 1000).toLocaleString([], tempHours === 24 ? {hour: "numeric", minute: "2-digit"} : {weekday: "short", hour: "numeric"});
+  $("t-min").textContent = `${lo}°F`; $("t-max").textContent = `${hi}°F`;
+  $("t-avg").textContent = `${avg.toFixed(1)}°F`;
+  svg.setAttribute("aria-label", `Room temperature over the last ${tempHours === 24 ? "24 hours" : "7 days"}: ${lo} to ${hi}°F, humidity ${Math.min(...hs)} to ${Math.max(...hs)}%`);
 }
-document.querySelectorAll("[data-h]").forEach(b => b.onclick = () => {
-  document.querySelectorAll("[data-h]").forEach(x => x.classList.toggle("on", x === b));
-  tempHours = Number(b.dataset.h); loadTemp();
-});
 
-// Ask Guardian (agent on the Pi)
+async function refresh() {
+  try { renderStatus(await api("/api/status")); await loadEvents(); await loadTemp(); } catch (e) { console.warn(e); }
+}
+
+// Ask Guardian
 function bubble(cls, text) {
   const el = document.createElement("div"); el.className = `msg ${cls}`; el.textContent = text;
   $("chat").appendChild(el); $("chat").scrollTop = $("chat").scrollHeight; return el;
+}
+function stepsList(calls) {
+  const ul = document.createElement("ul"); ul.className = "steps";
+  for (const c of calls) {
+    const kind = {done: "done", confirmed: "done", approved: "done", dry_run: "test", needs_confirmation: "wait"}[c.status] || "no";
+    const mark = {done: "✓", test: "✓", wait: "?", no: "✕"}[kind];
+    const what = (TOOL[c.tool] || (() => `Asked for "${c.tool}"`))(c.args || {});
+    const li = document.createElement("li"); li.className = kind;
+    li.innerHTML = `<span class="mark"></span><span><span class="what"></span> <span class="why"></span></span>`;
+    li.querySelector(".mark").textContent = mark;
+    li.querySelector(".what").textContent = kind === "wait" ? `Waiting for your OK: ${what.charAt(0).toLowerCase() + what.slice(1)}` : what;
+    li.querySelector(".why").textContent = c.status === "refused" ? `(not allowed: ${c.reason})`
+      : c.status === "cancelled" ? "(cancelled)" : c.status === "failed" ? `(failed: ${c.reason})`
+      : c.status === "dry_run" ? "(test mode)" : "";
+    ul.appendChild(li);
+  }
+  return ul;
 }
 async function ask(question) {
   question = question.trim();
@@ -323,9 +470,9 @@ async function ask(question) {
   const timer = setInterval(() => { el.textContent = `Thinking… ${Math.round((Date.now() - started) / 1000)} s`; }, 1000);
   try {
     const r = await fetch("/api/ask", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({question})});
-    const data = await r.json().catch(() => ({error: `Error ${r.status}`}));
+    const data = await r.json().catch(() => ({error: `The Pi answered with error ${r.status}.`}));
     el.className = "msg a";
-    if (!r.ok || data.error) { el.classList.add("err"); el.textContent = data.error || `Error ${r.status}`; return; }
+    if (!r.ok || data.error) { el.classList.add("err"); el.textContent = data.error || `The Pi answered with error ${r.status}.`; return; }
     el.textContent = data.answer;
     if (data.image) {
       const img = document.createElement("img"); img.className = "shot"; img.alt = "What the camera saw";
@@ -340,19 +487,33 @@ async function ask(question) {
         const b = document.createElement("button"); b.type = "button";
         b.style.setProperty("--k", (KIND[e.kind] || KIND.motion).color);
         b.title = `${fmtDay(e.time)}, ${fmtTime(e.time)}: ${e.description || e.reason}`;
-        b.innerHTML = e.image ? `<img alt="">` : `<span class="noimg">${fmtTime(e.time)}</span>`;
+        b.innerHTML = e.image ? `<img alt="">` : `<span class="noimg"></span>`;
         if (e.image) b.querySelector("img").src = `/thumbs/${encodeURIComponent(e.image)}`;
+        else b.querySelector(".noimg").textContent = fmtTime(e.time);
         b.onclick = () => openEvent(e);
         rel.appendChild(b);
       }
       el.appendChild(rel);
     }
+    if (data.tool_calls && data.tool_calls.length) el.appendChild(stepsList(data.tool_calls));
+    if (data.pending) {
+      const row = document.createElement("div"); row.className = "confirm";
+      for (const [label, reply, cls] of [["Yes, go ahead", "yes", "btn primary"], ["Cancel", "no", "btn"]]) {
+        const b = document.createElement("button"); b.type = "button"; b.textContent = label; b.className = cls;
+        b.onclick = () => { row.remove(); ask(reply); };
+        row.appendChild(b);
+      }
+      el.appendChild(row);
+    }
     const meta = document.createElement("div"); meta.className = "meta";
-    meta.textContent = [data.period, `${data.seconds} s`, data.used_llm ? "Llama 3.2" : data.image ? "Moondream" : "from the log"]
-      .filter(Boolean).join(" · ");
+    const engine = data.engine === "tools" ? `${data.model} chose the tools`
+      : data.engine === "rules" ? `Answered by the keyword rules${data.fallback_reason ? ` (${data.fallback_reason})` : ""}`
+      : data.image ? "Answered by Moondream" : "Answered from the log";
+    meta.textContent = `${data.period ? data.period.charAt(0).toUpperCase() + data.period.slice(1) + ". " : ""}${engine}, in ${data.seconds} s.`;
     el.appendChild(meta);
+    if ((data.tool_calls || []).some(c => ["done", "confirmed"].includes(c.status) && /set_mode|snooze|buzzer/.test(c.tool))) refresh();
   } catch (err) {
-    el.className = "msg a err"; el.textContent = "Couldn't reach the Pi.";
+    el.className = "msg a err"; el.textContent = "Couldn't reach the Pi. Check that Tailscale is on.";
   } finally {
     clearInterval(timer); $("ask-btn").disabled = false; $("chat").scrollTop = $("chat").scrollHeight;
   }
@@ -360,34 +521,52 @@ async function ask(question) {
 $("ask-form").onsubmit = ev => { ev.preventDefault(); ask($("ask-q").value); };
 document.querySelectorAll(".sug").forEach(b => b.onclick = () => ask(b.textContent));
 
-async function refresh() {
-  try { renderStatus(await api("/api/status")); await loadEvents(); await loadTemp(); } catch (e) { console.warn(e); }
-}
-
 // Controls
-$("btn-away").onclick = async () => { renderStatus(await api("/api/mode", {mode: "away"})); toast("Armed: you're away"); };
-$("btn-home").onclick = async () => { renderStatus(await api("/api/mode", {mode: "home"})); toast("Welcome back: summary sent to your phone"); };
-$("btn-snap").onclick = async () => { await api("/api/snapshot", {}); toast("Snapshot taken: description coming"); setTimeout(refresh, 4000); };
+$("btn-away").onclick = async () => { renderStatus(await api("/api/mode", {mode: "away"})); toast("Armed. Motion alerts are on."); };
+$("btn-home").onclick = async () => { renderStatus(await api("/api/mode", {mode: "home"})); toast("Disarmed. A summary is on its way to your phone."); };
+$("btn-snap").onclick = async () => { await api("/api/snapshot", {}); toast("Snapshot taken. The description will follow."); setTimeout(refresh, 4000); };
 $("snooze").onchange = async ev => {
   if (ev.target.value === "") return;
   const m = Number(ev.target.value);
   renderStatus(await api("/api/snooze", {minutes: m}));
-  toast(m ? `Alerts snoozed for ${m >= 60 ? m / 60 + " h" : m + " min"}` : "Alerts resumed");
+  toast(m ? `Alerts snoozed for ${m >= 60 ? m / 60 + (m === 60 ? " hour" : " hours") : m + " minutes"}.` : "Alerts resumed.");
   ev.target.value = "";
 };
-document.querySelectorAll(".chip").forEach(c => c.onclick = () => {
-  document.querySelectorAll(".chip").forEach(x => x.classList.remove("on"));
-  c.classList.add("on"); filter = c.dataset.f; loadEvents();
+document.querySelectorAll("[data-buzz]").forEach(btn => btn.onclick = async () => {
+  try {
+    const d = await api("/api/buzzer", {action: btn.dataset.buzz});
+    if (d.error) return toast(d.error);
+    renderStatus(d); toast(btn.dataset.buzz === "off" ? "Buzzer stopped." : `Buzzer: ${btn.textContent.toLowerCase()}.`);
+  } catch (e) { toast("The buzzer isn't available."); }
 });
-$("day").onchange = e => { day = e.target.value; loadEvents(); };
-$("btn-today").onclick = () => { day = new Date().toLocaleDateString("en-CA"); $("day").value = day; loadEvents(); };
-$("btn-alldays").onclick = () => { day = ""; $("day").value = ""; loadEvents(); };
+// Buzzer volume: set it over MQTT when the slider is released, then play a short beep to preview
+$("buzz-vol").oninput = e => { volDragging = true; $("buzz-vol-val").textContent = `${e.target.value}%`; };
+$("buzz-vol").onchange = async e => {
+  try {
+    const d = await api("/api/buzzer", {action: "volume", volume: Number(e.target.value)});
+    if (d.error) { volDragging = false; return toast(d.error); }
+    await api("/api/buzzer", {action: "beep"});
+    toast(`Buzzer volume set to ${e.target.value}%.`);
+  } catch (err) { toast("The buzzer isn't available."); }
+  volDragging = false;
+};
+document.querySelectorAll(".chip").forEach(c => c.onclick = () => {
+  document.querySelectorAll(".chip").forEach(x => x.classList.toggle("on", x === c));
+  filter = c.dataset.f; shown = 20; loadEvents();
+});
+$("day").onchange = e => { day = e.target.value; shown = 20; loadEvents(); };
+$("btn-today").onclick = () => { day = new Date().toLocaleDateString("en-CA"); $("day").value = day; shown = 20; loadEvents(); };
+$("btn-alldays").onclick = () => { day = ""; $("day").value = ""; shown = 20; loadEvents(); };
+document.querySelectorAll("[data-h]").forEach(b => b.onclick = () => {
+  document.querySelectorAll("[data-h]").forEach(x => x.classList.toggle("on", x === b));
+  tempHours = Number(b.dataset.h); loadTemp();
+});
 
 // Live view
 function setLive(on) {
   clearInterval(liveTimer); liveTimer = null;
   $("live-img").hidden = !on; $("live-tag").hidden = !on; $("live-off").hidden = on;
-  $("btn-live").textContent = on ? "■ Stop live view" : "▶ Start live view";
+  $("btn-live").textContent = on ? "Stop live view" : "Start live view";
   if (on) {
     const tick = () => { $("live-img").src = `/api/live.jpg?t=${Date.now()}`; };
     tick(); liveTimer = setInterval(tick, 1000);
