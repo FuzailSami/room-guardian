@@ -3,317 +3,325 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Room Guardian</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<title>Package Watcher</title>
 <style>
   :root {
-    --fog: #EDF0F3; --panel: #FFFFFF; --panel-2: #F5F7F9; --ink: #1E2832; --muted: #5B6876; --line: #D7DDE3;
-    --armed: #2E9C6A; --home: #3D6FD6; --snoozed: #D6962A; --alert: #D2453C; --ember: #DD7333; --answer: #7B5CC9;
-    --state: var(--armed);
-    --radius-lg: 22px; --radius: 14px; --radius-sm: 10px;
+    --bg: #F6F7F8; --surface: #FFFFFF; --surface-2: #F1F2F4; --ink: #111418; --muted: #68707A;
+    --line: rgba(17, 20, 24, .09); --line-strong: rgba(17, 20, 24, .18);
+    --green: #1F8A5B; --amber: #C96A1B; --red: #C83E37; --blue: #2B63D9;
+    --status: var(--green);
+    --r-lg: 16px; --r: 12px; --r-sm: 8px;
     color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      --fog: #131A21; --panel: #1A232C; --panel-2: #212C36; --ink: #E4E9EE; --muted: #9AA7B4; --line: #2C3843;
-      --armed: #43B784; --home: #6C93EA; --snoozed: #E2AA45; --alert: #E7665D; --ember: #EE8C4E; --answer: #A58BEA;
-      color-scheme: dark;
+    :root {
+      --bg: #0D1014; --surface: #15191F; --surface-2: #1C2129; --ink: #ECEFF2; --muted: #8B949E;
+      --line: rgba(255, 255, 255, .09); --line-strong: rgba(255, 255, 255, .18);
+      --green: #38B37C; --amber: #E88B3E; --red: #E55C54; --blue: #5C8DF0;
     }
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
-  html { -webkit-text-size-adjust: 100%; }
-  body { margin: 0; background: var(--fog); color: var(--ink);
-         font: 16px/1.5 "Schibsted Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
-         font-variant-numeric: tabular-nums; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums;
+  }
   button, select, input { font: inherit; color: inherit; }
-  :focus-visible { outline: 2px solid var(--home); outline-offset: 2px; }
-  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
+  :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+  .wrap { max-width: 1020px; margin: 0 auto; padding: 20px 20px 48px; display: grid; gap: 16px; }
 
   /* Header */
-  header { padding: 18px 0 6px; }
-  .bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .brand { font-weight: 700; font-size: 18px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 10px; }
-  .brand-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--state); box-shadow: 0 0 0 4px color-mix(in srgb, var(--state) 22%, transparent); }
-  .btn { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 8px 15px; cursor: pointer;
-         text-decoration: none; color: var(--ink); display: inline-flex; align-items: center; gap: 6px; font-weight: 500; line-height: 1.2; }
-  .btn:hover { border-color: var(--muted); }
-  .btn.primary { background: var(--ink); color: var(--fog); border-color: var(--ink); }
-  .btn.primary:hover { opacity: .9; }
-  .btn:disabled { opacity: .5; cursor: wait; }
-  .seg { display: inline-flex; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 3px; }
-  .seg button { border: 0; background: none; border-radius: 999px; padding: 6px 14px; cursor: pointer; font-weight: 500; color: var(--muted); white-space: nowrap; }
-  .seg button.on { background: var(--state); color: #fff; }
-  select.btn { appearance: none; padding-right: 15px; }
+  header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-bottom: 4px; }
+  .brand { font-size: 16px; font-weight: 600; letter-spacing: -.01em; margin-right: 4px; }
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 7px; padding: 4px 11px;
+    border-radius: 999px; background: var(--surface); border: 1px solid var(--line);
+    font-size: 13px; font-weight: 500; margin-right: auto;
+  }
+  .status-pill i { width: 7px; height: 7px; border-radius: 50%; background: var(--status); }
 
-  /* Status pill */
-  .pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 999px; background: var(--panel);
-          border: 1px solid var(--line); font-weight: 600; font-size: 14px; margin-right: auto; }
-  .pill .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--state); box-shadow: 0 0 0 4px color-mix(in srgb, var(--state) 22%, transparent); }
+  .btn {
+    border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+    border-radius: var(--r-sm); padding: 6px 12px; font-size: 13px; font-weight: 500;
+    cursor: pointer; display: inline-flex; align-items: center; gap: 6px; text-decoration: none;
+    transition: border-color .15s, background .15s;
+  }
+  .btn:hover { border-color: var(--line-strong); background: var(--surface-2); }
+  .btn.primary { background: var(--ink); color: var(--bg); border-color: transparent; }
+  .btn.primary:hover { opacity: .88; background: var(--ink); }
+  .btn.sm { padding: 4px 10px; font-size: 12px; }
+  .btn:disabled { opacity: .45; cursor: wait; }
+  select.btn { padding-right: 10px; }
 
-  /* Today + live view */
-  .top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 20px; align-items: start; padding-top: 14px; }
-  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
-  .stat { background: var(--panel-2); border-radius: var(--radius); padding: 12px 14px; }
-  .stat b { display: block; font-size: 30px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; }
-  .stat span { color: var(--muted); font-size: 14px; }
-  .temp { margin-top: 12px; background: var(--panel-2); border-radius: var(--radius); padding: 14px; }
-  .live { position: relative; aspect-ratio: 4/3; background: #0E141A; border-radius: var(--radius); overflow: hidden;
-          margin-top: 12px; outline: 3px solid var(--state); outline-offset: -3px; }
-  .live img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .live .off { position: absolute; inset: 0; display: grid; place-items: center; color: #9AA7B4; font-size: 15px; }
-  .live .tag { position: absolute; top: 12px; left: 12px; background: var(--alert); color: #fff; font-size: 13px; font-weight: 600;
-               padding: 3px 11px; border-radius: 999px; display: inline-flex; align-items: center; gap: 6px; }
-  .live .tag i { width: 7px; height: 7px; border-radius: 50%; background: #fff; }
-  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
-  .row .note { color: var(--muted); font-size: 14px; }
-  .vol { display: flex; align-items: center; gap: 10px; width: 100%; }
-  .vol label { color: var(--muted); font-size: 14px; }
-  .vol input[type=range] { flex: 1; max-width: 260px; accent-color: var(--ink); }
-  .vol output { font-weight: 600; min-width: 3.5ch; text-align: right; }
+  /* Grid & Cards */
+  .grid { display: grid; grid-template-columns: 1fr 1.15fr; gap: 16px; align-items: start; }
+  .stack { display: grid; gap: 16px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--r-lg); padding: 18px;
+  }
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+  .card-title { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 0; }
+  .muted { color: var(--muted); font-size: 13px; }
 
-  /* Panels */
-  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 22px; }
-  .panel h2 { font-size: 20px; margin: 0 0 4px; letter-spacing: -0.01em; font-weight: 650; }
-  .panel .hint { color: var(--muted); font-size: 14px; margin: 0 0 16px; }
-
-  /* Ask */
-  .ask { margin-top: 20px; }
-  .chat { display: flex; flex-direction: column; gap: 12px; max-height: 460px; overflow-y: auto; margin-bottom: 14px; padding-right: 2px; }
-  .chat:empty { display: none; }
-  .msg { max-width: 88%; padding: 11px 15px; border-radius: 18px; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .msg.q { align-self: flex-end; background: var(--ink); color: var(--fog); border-bottom-right-radius: 6px; }
-  .msg.a { align-self: flex-start; background: var(--panel-2); border-bottom-left-radius: 6px; }
-  .msg.err { color: var(--alert); }
-  .msg.thinking { color: var(--muted); }
-  .msg .shot { margin-top: 10px; width: min(300px, 100%); border-radius: var(--radius-sm); display: block; cursor: zoom-in; }
-  .steps { list-style: none; margin: 10px 0 0; padding: 10px 0 0; border-top: 1px solid var(--line); font-size: 14px; display: grid; gap: 4px; white-space: normal; }
-  .steps li { display: flex; gap: 8px; align-items: baseline; }
-  .steps .mark { width: 16px; flex: none; text-align: center; font-weight: 700; }
-  .steps .done .mark { color: var(--armed); }
-  .steps .wait .mark { color: var(--snoozed); }
-  .steps .no .mark { color: var(--alert); }
-  .steps .test .mark { color: var(--answer); }
-  .steps .why { color: var(--muted); }
-  .msg .meta { margin-top: 8px; font-size: 13px; color: var(--muted); white-space: normal; }
-  .confirm { display: flex; gap: 8px; margin-top: 10px; }
-  .rel { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
-  .rel button { padding: 0; border: 2px solid var(--k, var(--line)); border-radius: 10px; overflow: hidden; width: 84px; background: none; cursor: zoom-in; }
-  .rel img { width: 100%; aspect-ratio: 4/3; object-fit: cover; display: block; }
-  .rel .noimg { display: grid; place-items: center; aspect-ratio: 4/3; font-size: 12px; color: var(--muted); }
-  .sugs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-  .sug { border: 1px dashed var(--line); background: none; border-radius: 999px; padding: 6px 13px; cursor: pointer; font-size: 14px; color: var(--muted); }
-  .sug:hover { color: var(--ink); border-style: solid; }
-  .ask-row { display: flex; gap: 8px; }
-  .ask-row input { flex: 1; min-width: 0; background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px; padding: 11px 16px; }
+  /* Package Card */
+  .pkg-empty { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 0; }
+  .pkg-active { display: grid; grid-template-columns: 84px 1fr; gap: 14px; align-items: start; }
+  .pkg-thumb {
+    width: 84px; aspect-ratio: 4/3; object-fit: cover; border-radius: var(--r-sm);
+    background: var(--surface-2); cursor: zoom-in; display: block;
+  }
+  .pkg-meta { font-size: 13px; font-weight: 600; color: var(--amber); }
+  .pkg-desc { margin: 3px 0 6px; font-size: 14px; }
+  .pkg-advice {
+    background: var(--surface-2); border-radius: var(--r-sm); padding: 9px 11px;
+    font-size: 13px; line-height: 1.45;
+  }
+  .pkg-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .pkg-notes { font-size: 12px; color: var(--muted); }
 
   /* Temperature */
-  .temp-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-  .temp-now { font-size: 34px; font-weight: 600; letter-spacing: -0.03em; line-height: 1; color: var(--ember); }
-  .temp-sub { color: var(--muted); font-size: 14px; margin-top: 6px; }
-  .seg.small button { padding: 4px 11px; font-size: 14px; }
-  .seg.small button.on { background: var(--ink); color: var(--fog); }
-  #t-chart { width: 100%; height: 110px; display: block; margin: 14px 0 4px; overflow: visible; }
-  .t-axis { display: flex; justify-content: space-between; color: var(--muted); font-size: 13px; margin-bottom: 12px; }
-  .temp-facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 0; }
-  .temp-facts div { background: var(--panel); border-radius: var(--radius-sm); padding: 8px 12px; }
-  .temp-facts dt { color: var(--muted); font-size: 13px; }
-  .temp-facts dd { margin: 0; font-weight: 600; }
-  .cpu { color: var(--muted); font-size: 14px; margin-top: 12px; }
-
-  /* Timeline */
-  .timeline-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 0 0 6px; }
-  .events { margin-top: 20px; }
-  .timeline-head h2 { margin: 0 auto 0 0; }
-  .chip { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 6px 14px; cursor: pointer; font-weight: 500; }
-  .chip.on { background: var(--ink); color: var(--fog); border-color: var(--ink); }
-  input[type=date].btn { padding: 6px 12px; }
-  .day { margin-top: 26px; }
-  .day h3 { font-size: 15px; font-weight: 600; color: var(--muted); margin: 0 0 8px; }
-  .rail { list-style: none; margin: 0; padding: 0; position: relative; }
-  .rail::before { content: ""; position: absolute; left: 88px; top: 8px; bottom: 8px; width: 2px; background: var(--line); }
-  .ev { display: grid; grid-template-columns: 64px 26px 132px 1fr; gap: 12px; align-items: center; padding: 8px 0; cursor: pointer; border-radius: var(--radius); }
-  .ev:hover .ev-photo, .ev:focus-visible .ev-photo { outline: 2px solid var(--k); outline-offset: 2px; }
-  .ev-time { text-align: right; color: var(--muted); font-size: 14px; }
-  .ev-dot { width: 14px; height: 14px; border-radius: 50%; background: var(--k); justify-self: center; position: relative; z-index: 1;
-            box-shadow: 0 0 0 4px var(--fog); }
-  .ev-photo { width: 132px; aspect-ratio: 4/3; border-radius: var(--radius-sm); object-fit: cover; background: var(--panel-2); display: block; }
-  .ev-photo.none { display: grid; place-items: center; color: var(--muted); font-size: 12px; text-align: center; }
-  .ev-kind { font-weight: 600; color: var(--k); font-size: 14px; }
-  .ev-desc { margin: 2px 0 0; max-width: 60ch; }
-  .empty { color: var(--muted); padding: 30px 0; }
-  .more { margin: 14px 0 0 88px; }
-
-  /* Dialog + toast */
-  dialog { border: 0; border-radius: var(--radius-lg); padding: 0; max-width: min(920px, 94vw); background: var(--panel); color: var(--ink); overflow: hidden; }
-  dialog::backdrop { background: rgba(10, 15, 20, .72); }
-  dialog img { width: 100%; display: block; }
-  dialog .body { padding: 16px 20px 20px; }
-  dialog .close { position: absolute; top: 12px; right: 12px; background: rgba(14,20,26,.7); color: #fff; border: 0; border-radius: 999px; width: 36px; height: 36px; cursor: pointer; font-size: 16px; }
-  .dlg-kind { font-weight: 600; }
-  .dlg-time { color: var(--muted); }
-  #toast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 16px); background: var(--ink); color: var(--fog);
-           padding: 11px 18px; border-radius: 999px; font-weight: 500; opacity: 0; visibility: hidden; transition: opacity .2s, transform .2s, visibility .2s; z-index: 9; }
-  #toast.show { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
-  footer { color: var(--muted); font-size: 13px; padding: 40px 0 30px; }
-
-  @media (max-width: 860px) {
-    .top { grid-template-columns: minmax(0, 1fr); }
+  .temp-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .temp-val { font-size: 32px; font-weight: 600; letter-spacing: -.03em; line-height: 1; }
+  .temp-sub { font-size: 13px; color: var(--muted); margin-top: 4px; }
+  .seg { display: inline-flex; background: var(--surface-2); border-radius: var(--r-sm); padding: 2px; gap: 2px; }
+  .seg button {
+    border: 0; background: none; border-radius: 6px; padding: 3px 9px;
+    font-size: 12px; font-weight: 500; color: var(--muted); cursor: pointer;
   }
-  @media (max-width: 560px) {
-    .wrap { padding: 0 16px; }
-    .brand { width: 100%; margin-right: 0; }
-    .ev { grid-template-columns: 50px 22px 96px 1fr; gap: 8px; }
-    .rail::before { left: 68px; }
-    .ev-photo { width: 96px; }
-    .ev-desc { font-size: 15px; }
-    .more { margin-left: 68px; }
-    .temp-facts { grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
-    .stat b { font-size: 26px; }
-    .panel { padding: 18px; }
-    .temp-top { flex-wrap: wrap; }
+  .seg button.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+  #t-chart { width: 100%; height: 76px; display: block; margin: 12px 0 8px; overflow: visible; }
+  .temp-foot { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); gap: 8px; flex-wrap: wrap; }
+
+  /* Camera & Buzzer */
+  .cam-box {
+    position: relative; aspect-ratio: 4/3; border-radius: var(--r); overflow: hidden;
+    background: #0B0D10; border: 1px solid var(--line);
+  }
+  .cam-box img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .cam-off { position: absolute; inset: 0; display: grid; place-items: center; color: #8B949E; font-size: 13px; }
+  .cam-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+  .buzz-bar {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--line);
+  }
+  .buzz-bar input[type=range] { width: 88px; accent-color: var(--ink); margin-left: auto; }
+
+  /* Ask Agent */
+  .chat { display: flex; flex-direction: column; gap: 10px; max-height: 320px; overflow-y: auto; margin-bottom: 12px; }
+  .chat:empty { display: none; }
+  .msg { max-width: 82%; padding: 9px 13px; border-radius: 14px; font-size: 14px; line-height: 1.45; white-space: pre-wrap; }
+  .msg.q { align-self: flex-end; background: var(--ink); color: var(--bg); border-bottom-right-radius: 4px; }
+  .msg.a { align-self: flex-start; background: var(--surface-2); border-bottom-left-radius: 4px; }
+  .msg.err { color: var(--red); }
+  .msg.thinking { color: var(--muted); }
+  .msg .shot { margin-top: 8px; width: min(240px, 100%); border-radius: var(--r-sm); display: block; cursor: zoom-in; }
+  .confirm { display: flex; gap: 8px; margin-top: 8px; }
+
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .chip {
+    border: 1px solid var(--line); background: none; border-radius: 999px;
+    padding: 4px 11px; font-size: 12px; color: var(--muted); cursor: pointer;
+    transition: color .15s, border-color .15s, background .15s;
+  }
+  .chip:hover { color: var(--ink); border-color: var(--line-strong); }
+  .chip.on { background: var(--ink); color: var(--bg); border-color: transparent; }
+
+  .ask-form { display: flex; gap: 8px; }
+  .ask-form input {
+    flex: 1; min-width: 0; background: var(--surface-2); border: 1px solid var(--line);
+    border-radius: var(--r-sm); padding: 9px 12px; font-size: 14px;
+  }
+  .ask-form input:focus { outline: none; border-color: var(--line-strong); background: var(--surface); }
+
+  /* History */
+  .hist-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .hist-head .card-title { margin-right: auto; }
+  .ev-list { list-style: none; margin: 0; padding: 0; }
+  .ev {
+    display: grid; grid-template-columns: 56px 56px 1fr; gap: 12px; align-items: center;
+    padding: 10px 6px; border-top: 1px solid var(--line); cursor: pointer; border-radius: var(--r-sm);
+  }
+  .ev:first-child { border-top: 0; }
+  .ev:hover { background: var(--surface-2); }
+  .ev-time { font-size: 12px; color: var(--muted); text-align: right; }
+  .ev-photo { width: 56px; aspect-ratio: 4/3; border-radius: 6px; object-fit: cover; background: var(--surface-2); display: block; }
+  .ev-photo.none { display: grid; place-items: center; font-size: 11px; color: var(--muted); }
+  .ev-top { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
+  .ev-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--k); flex: none; }
+  .ev-desc { margin: 2px 0 0; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .more { margin-top: 10px; }
+
+  footer { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); padding: 4px 2px; }
+  footer a { color: var(--muted); text-decoration: none; }
+  footer a:hover { color: var(--ink); }
+
+  /* Modal & Toast */
+  dialog { border: 1px solid var(--line); border-radius: var(--r-lg); padding: 0; max-width: min(760px, 94vw); background: var(--surface); color: var(--ink); overflow: hidden; }
+  dialog::backdrop { background: rgba(0, 0, 0, .6); }
+  dialog img { width: 100%; display: block; max-height: 65vh; object-fit: contain; background: #0B0D10; }
+  dialog .body { padding: 16px 18px; }
+  dialog .close { position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,.6); color: #fff; border: 0; border-radius: 999px; width: 30px; height: 30px; cursor: pointer; }
+  #toast {
+    position: fixed; left: 50%; bottom: 20px; transform: translate(-50%, 10px);
+    background: var(--ink); color: var(--bg); padding: 8px 16px; border-radius: 999px;
+    font-size: 13px; font-weight: 500; opacity: 0; visibility: hidden; transition: opacity .18s, transform .18s; z-index: 9;
+  }
+  #toast.show { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
+
+  @media (max-width: 780px) { .grid { grid-template-columns: 1fr; } }
+  @media (max-width: 520px) {
+    .pkg-active { grid-template-columns: 1fr; }
+    .ev { grid-template-columns: 48px 48px 1fr; gap: 10px; }
   }
 </style>
 </head>
 <body>
-<header>
-  <div class="wrap bar">
-    <div class="brand">Room Guardian</div>
-    <span class="pill"><span class="dot" aria-hidden="true"></span><span id="mode-text">Connecting to the Pi</span></span>
-    <div class="seg" role="group" aria-label="Mode">
-      <button id="btn-away">Away</button><button id="btn-home">Home</button>
-    </div>
+<div class="wrap">
+  <header>
+    <div class="brand">Package Watcher</div>
+    <span class="status-pill"><i></i><span id="mode-text">Connecting…</span></span>
     <select id="snooze" class="btn" aria-label="Snooze alerts">
-      <option value="">Snooze alerts</option><option value="30">For 30 minutes</option><option value="60">For 1 hour</option>
-      <option value="240">For 4 hours</option><option value="0">Resume alerts</option>
+      <option value="">Snooze</option>
+      <option value="30">30 min</option>
+      <option value="60">1 hour</option>
+      <option value="240">4 hours</option>
+      <option value="0">Resume</option>
     </select>
-    <a href="/label" class="btn" title="Label photos for the accuracy report">Label photos</a>
-    <button class="btn primary" id="btn-snap">Take snapshot</button>
-  </div>
-</header>
+    <button class="btn primary" id="btn-snap">Snapshot</button>
+  </header>
 
-<main class="wrap">
-  <section class="top">
-    <div class="panel">
-      <h2>Today</h2>
-      <div class="stats">
-        <div class="stat"><b id="s-events">–</b><span>motion events</span></div>
-        <div class="stat"><b id="s-people">–</b><span>with people</span></div>
-        <div class="stat"><b id="s-susp">–</b><span>suspicious</span></div>
-      </div>
-      <div class="temp">
-        <div class="temp-top">
+  <div class="grid">
+    <div class="stack">
+      <section class="card">
+        <div class="card-head">
+          <h2 class="card-title">Package</h2>
+          <span class="muted" id="today-summary"></span>
+        </div>
+        <div class="pkg-empty" id="pkg-empty">
+          <span class="muted">No package outside.</span>
+        </div>
+        <div class="pkg-active" id="pkg-active" hidden>
+          <img class="pkg-thumb" id="pkg-img" alt="Package">
           <div>
-            <div class="temp-now" id="t-now">–</div>
-            <div class="temp-sub" id="t-sub">No sensor reading</div>
-          </div>
-          <div class="seg small" role="group" aria-label="Chart range">
-            <button class="on" data-h="24">24 h</button><button data-h="168">7 days</button>
+            <div class="pkg-meta" id="pkg-title"></div>
+            <div class="pkg-desc" id="pkg-desc"></div>
+            <div class="pkg-advice" id="pkg-advice"></div>
+            <div class="pkg-foot">
+              <span class="pkg-notes" id="pkg-notes"></span>
+              <button class="btn primary sm" id="btn-picked">Mark picked up</button>
+            </div>
           </div>
         </div>
-        <svg id="t-chart" viewBox="0 0 400 110" preserveAspectRatio="none" role="img" aria-label="Room temperature chart"></svg>
-        <div class="t-axis"><span id="t-from">24 hours ago</span><span>Now</span></div>
-        <dl class="temp-facts">
-          <div><dt>Low</dt><dd id="t-min">–</dd></div>
-          <div><dt>High</dt><dd id="t-max">–</dd></div>
-          <div><dt>Average</dt><dd id="t-avg">–</dd></div>
-        </dl>
-        <div class="cpu" id="t-cpu"></div>
-      </div>
-      <p class="hint" id="meta" style="margin: 12px 0 0">&nbsp;</p>
-    </div>
+      </section>
 
-    <div class="panel">
-      <h2>Live view</h2>
-      <div class="live">
-        <img id="live-img" alt="Live camera view" hidden>
-        <div class="off" id="live-off">Live view is off</div>
-        <span class="tag" id="live-tag" hidden><i></i>Live</span>
-      </div>
-      <div class="row"><button class="btn" id="btn-live">Start live view</button>
-        <span class="note">Refreshes about once a second while open</span></div>
-      <div class="row" id="buzz-row" hidden>
-        <span class="note">Buzzer</span>
-        <button class="btn" data-buzz="beep">Beep</button><button class="btn" data-buzz="alarm">Sound alarm</button><button class="btn" data-buzz="off">Stop</button>
-        <span class="note" id="buzz-state"></span>
-        <div class="vol">
-          <label for="buzz-vol">Volume</label>
-          <input type="range" id="buzz-vol" min="5" max="100" step="5" value="60">
-          <output id="buzz-vol-val" for="buzz-vol">60%</output>
-          <span class="note">plays a beep when you let go</span>
+      <section class="card">
+        <div class="card-head">
+          <h2 class="card-title">Outdoor temp</h2>
+          <div class="seg" role="group" aria-label="Range">
+            <button class="on" data-h="24">24h</button>
+            <button data-h="168">7d</button>
+          </div>
         </div>
-      </div>
+        <div class="temp-row">
+          <div>
+            <div class="temp-val" id="t-now">–</div>
+            <div class="temp-sub" id="t-sub">No reading</div>
+          </div>
+        </div>
+        <svg id="t-chart" viewBox="0 0 400 76" preserveAspectRatio="none" aria-label="Temperature chart"></svg>
+        <div class="temp-foot">
+          <span id="t-range">–</span>
+          <span id="t-cpu"></span>
+        </div>
+      </section>
     </div>
-  </section>
 
-  <section class="panel ask">
-    <h2>Ask Guardian</h2>
-    <p class="hint">Ask what happened, or tell it to beep, arm, snooze or take a photo. Disarming and snoozing ask you first. Answers can take 10–40 s.</p>
+    <section class="card">
+      <div class="card-head">
+        <h2 class="card-title">Camera</h2>
+        <button class="btn sm" id="btn-live">Start live</button>
+      </div>
+      <div class="cam-box">
+        <img id="live-img" alt="Live camera" hidden>
+        <div class="cam-off" id="live-off">Live view paused</div>
+      </div>
+      <div class="buzz-bar" id="buzz-row" hidden>
+        <span class="muted">Buzzer</span>
+        <button class="btn sm" data-buzz="beep">Beep</button>
+        <button class="btn sm" data-buzz="alarm">Alarm</button>
+        <button class="btn sm" data-buzz="off">Stop</button>
+        <input type="range" id="buzz-vol" min="5" max="100" step="5" value="60" aria-label="Buzzer volume">
+        <span class="muted" id="buzz-vol-val">60%</span>
+      </div>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="card-head">
+      <h2 class="card-title">Ask agent</h2>
+      <span class="muted">Tell it what's inside for better advice</span>
+    </div>
     <div class="chat" id="chat" aria-live="polite"></div>
-    <div class="sugs">
-      <button class="sug">Summarize this week</button>
-      <button class="sug">Anything happen today?</button>
-      <button class="sug">When did someone last come in?</button>
-      <button class="sug">How hot did it get today?</button>
-      <button class="sug">What's in the room right now?</button>
-      <button class="sug">Sound a beep</button>
-      <button class="sug">Snooze alerts for 30 minutes</button>
+    <div class="chips">
+      <button class="chip sug">Should I bring it inside?</button>
+      <button class="chip sug">It has chocolate inside</button>
+      <button class="chip sug">It's just paper towels</button>
+      <button class="chip sug">Any deliveries today?</button>
+      <button class="chip sug">How hot did it get today?</button>
     </div>
-    <form class="ask-row" id="ask-form">
-      <input id="ask-q" maxlength="300" autocomplete="off" placeholder="Ask a question or give a command" aria-label="Question or command">
+    <form class="ask-form" id="ask-form">
+      <input id="ask-q" maxlength="300" autocomplete="off" placeholder="Ask if you should bring it in, or share what's inside…" aria-label="Ask agent">
       <button class="btn primary" id="ask-btn">Ask</button>
     </form>
   </section>
 
-  <section class="panel events">
-    <div class="timeline-head">
-      <h2>What happened</h2>
-      <button class="chip on" data-f="all">Everything</button>
-      <button class="chip" data-f="people">People</button>
-      <button class="chip" data-f="suspicious">Suspicious</button>
-      <button class="chip" data-f="alerts">Alerts</button>
-      <input type="date" id="day" class="btn" aria-label="Show one day">
-      <button class="btn" id="btn-today">Today</button>
-      <button class="btn" id="btn-alldays">All days</button>
+  <section class="card">
+    <div class="hist-head">
+      <h2 class="card-title">History</h2>
+      <button class="chip flt on" data-f="all">All</button>
+      <button class="chip flt" data-f="delivered">Delivered</button>
+      <button class="chip flt" data-f="picked_up">Picked up</button>
+      <button class="chip flt" data-f="temp_alert">Alerts</button>
+      <input type="date" id="day" class="btn sm" aria-label="Filter by date">
     </div>
-    <div id="timeline"></div>
+    <ul class="ev-list" id="timeline"></ul>
+    <button class="btn sm more" id="btn-more" hidden>Show more</button>
   </section>
 
-</main>
+  <footer>
+    <span id="meta"></span>
+    <a href="/label">Label photos</a>
+  </footer>
+</div>
 
 <dialog id="dlg">
   <button class="close" onclick="dlg.close()" aria-label="Close">✕</button>
   <img id="dlg-img" alt="">
-  <div class="body"><span class="dlg-kind" id="dlg-kind"></span> <span class="dlg-time" id="dlg-time"></span>
-    <p id="dlg-desc"></p><div class="dlg-time" id="dlg-meta"></div></div>
+  <div class="body">
+    <strong id="dlg-kind"></strong> <span class="muted" id="dlg-time"></span>
+    <p id="dlg-desc" style="margin:8px 0 4px"></p>
+    <p id="dlg-advice" class="muted" style="margin:4px 0"></p>
+    <div class="muted" id="dlg-meta" style="font-size:12px"></div>
+  </div>
 </dialog>
 <div id="toast" role="status"></div>
 
 <script>
 const KIND = {
-  person:     {label: "Person",     color: "var(--alert)"},
-  suspicious: {label: "Suspicious", color: "var(--snoozed)"},
-  motion:     {label: "Motion",     color: "var(--muted)"},
-  snapshot:   {label: "Snapshot",   color: "var(--home)"},
-  answer:     {label: "Question",   color: "var(--answer)"},
+  delivered:  {label: "Delivered",  color: "var(--amber)"},
+  picked_up:  {label: "Picked up",  color: "var(--green)"},
+  temp_alert: {label: "Temp alert", color: "var(--red)"},
+  snapshot:   {label: "Snapshot",   color: "var(--blue)"},
+  answer:     {label: "Answer",     color: "var(--muted)"},
 };
-const TOOL = {  // how the agent's tool calls read to a person
-  get_events: a => `Checked events${a.period ? ", " + a.period : ""}`,
-  get_temperature: a => `Checked the temperature${a.period ? ", " + a.period : ""}`,
-  get_status: () => "Checked the current settings",
-  look_at_room: () => "Looked at the room",
-  sound_buzzer: a => a.pattern === "off" ? "Turned the buzzer off" : `Sounded the buzzer (${a.pattern || "?"})`,
-  set_mode: a => a.mode === "home" ? "Disarm (home mode)" : "Arm (away mode)",
-  snooze_alerts: a => a.minutes ? `Snooze alerts for ${a.minutes} minutes` : "Resume alerts",
-  take_snapshot: () => "Take a snapshot",
-};
-let filter = "all", day = "", liveTimer = null, tempHours = 24, shown = 20, volDragging = false;
+let filter = "all", day = "", liveTimer = null, tempHours = 24, shown = 15, volDragging = false;
 const $ = id => document.getElementById(id);
 const cToF = c => Math.round((c * 9 / 5 + 32) * 10) / 10;
 const fmtTime = iso => new Date(iso).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
-const fmtDay = iso => new Date(iso).toLocaleDateString([], {weekday: "long", month: "long", day: "numeric"});
+const fmtDay = iso => new Date(iso).toLocaleDateString([], {month: "short", day: "numeric"});
 const clock = hhmm => { const [h, m] = hhmm.split(":").map(Number); const d = new Date(); d.setHours(h, m); return fmtTime(d); };
 
 async function api(path, body) {
@@ -322,251 +330,190 @@ async function api(path, body) {
   if (r.status === 401) { document.body.innerHTML = "<p style='padding:24px'>Session expired. Open the dashboard link with ?key=… again.</p>"; throw new Error("401"); }
   return r.json();
 }
-function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), 2400); }
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), 2200);
+}
 
-// Status: pill, state colour, today's numbers, temperature, buzzer
 function renderStatus(s) {
-  const snoozed = !!s.snoozed_until, home = s.mode === "home";
-  const state = snoozed ? "snoozed" : home ? "home" : "armed";
-  document.documentElement.style.setProperty("--state", `var(--${state})`);
-  const since = s.away_since ? s.away_since.split(" ") : null;  // "Thu 09:12"
-  const today = new Date().toLocaleDateString("en-US", {weekday: "short"});
+  const snoozed = !!s.snoozed_until, pkg = s.active_package;
+  const color = snoozed ? "var(--blue)" : pkg ? "var(--amber)" : "var(--green)";
+  document.documentElement.style.setProperty("--status", color);
   $("mode-text").textContent = snoozed ? `Snoozed until ${clock(s.snoozed_until)}`
-    : home ? "Home, motion alerts off"
-    : `Armed since ${since ? (since[0] === today ? clock(since[1]) : `${since[0]} ${clock(since[1])}`) : "now"}`;
-  $("btn-away").classList.toggle("on", !home);
-  $("btn-home").classList.toggle("on", home);
-  $("s-events").textContent = s.today.events;
-  $("s-people").textContent = s.today.people;
-  $("s-susp").textContent = s.today.suspicious;
+    : pkg ? `Outside · ${pkg.outside_minutes}m` : "Clear";
+
+  $("today-summary").textContent = `${s.today.deliveries} today`;
+  $("pkg-empty").hidden = !!pkg;
+  $("pkg-active").hidden = !pkg;
+  if (pkg) {
+    $("pkg-img").hidden = !pkg.image;
+    if (pkg.image) {
+      $("pkg-img").src = `/thumbs/${encodeURIComponent(pkg.image)}`;
+      $("pkg-img").onclick = () => openEvent({kind: "delivered", time: pkg.arrived_at, image: pkg.image, description: pkg.description, advice: pkg.advice, temp_f: pkg.temp_f, humidity: pkg.humidity, notes: pkg.notes});
+    }
+    $("pkg-title").textContent = `Arrived ${fmtTime(pkg.arrived_at)} · ${pkg.outside_minutes}m ago`;
+    $("pkg-desc").textContent = pkg.description || "Package detected";
+    $("pkg-advice").textContent = pkg.advice || "Ask the agent if you should bring it in.";
+    $("pkg-notes").textContent = pkg.notes ? `Note: ${pkg.notes}` : "";
+  }
+
   const t = s.temperature;
   $("t-now").textContent = t ? `${t.f}°F` : "–";
-  $("t-sub").textContent = t ? `${t.c}°C and ${t.humidity}% humidity${t.age_s > 300 ? `, read ${Math.round(t.age_s / 60)} min ago` : ""}` : "No sensor reading";
-  $("t-cpu").textContent = s.cpu_c != null ? `The Pi's processor is at ${cToF(s.cpu_c)}°F (${s.cpu_c}°C).` : "";
+  $("t-sub").textContent = t ? `${t.c}°C · ${t.humidity}% humidity` : "Sensor offline";
+  $("t-cpu").textContent = s.cpu_c != null ? `Pi ${cToF(s.cpu_c)}°F` : "";
+
   const b = s.buzzer;
   $("buzz-row").hidden = !b;
-  if (b) {
-    $("buzz-state").textContent = b.state !== "off" ? `Sounding: ${b.state}`
-      : b.action === "volume" ? `Volume set from ${b.source}${b.latency_ms != null ? `, ${b.latency_ms} ms over MQTT` : ""}`
-      : b.action ? `Last: ${b.action} from ${b.source}${b.latency_ms != null ? `, ${b.latency_ms} ms over MQTT` : ""}` : "";
-    if (b.volume != null && !volDragging) { $("buzz-vol").value = Math.round(b.volume * 100); $("buzz-vol-val").textContent = `${Math.round(b.volume * 100)}%`; }
+  if (b && b.volume != null && !volDragging) {
+    const pct = Math.round(b.volume * 100);
+    $("buzz-vol").value = pct; $("buzz-vol-val").textContent = `${pct}%`;
   }
-  $("meta").textContent = [s.last_event ? `Last motion at ${clock(s.last_event)}.` : "No motion so far today.",
-    s.queue ? `${s.queue} event${s.queue > 1 ? "s" : ""} still being analyzed.` : "",
-    `Person detector ${s.person_detector ? "on" : "off"}.`].filter(Boolean).join(" ");
+  $("meta").textContent = s.last_event ? `Last event ${clock(s.last_event)}` : "";
 }
 
-// Timeline as a vertical rail, grouped by day
-function evRow(e) {
-  const k = KIND[e.kind] || KIND.motion;
-  const li = document.createElement("li");
-  li.className = "ev"; li.tabIndex = 0; li.style.setProperty("--k", k.color);
-  li.innerHTML = `<span class="ev-time"></span><span class="ev-dot"></span>` +
-    (e.image ? `<img class="ev-photo" loading="lazy" alt="">` : `<span class="ev-photo none">No photo kept</span>`) +
-    `<div><div class="ev-kind"></div><p class="ev-desc"></p></div>`;
-  li.querySelector(".ev-time").textContent = fmtTime(e.time);
-  if (e.image) li.querySelector("img").src = `/thumbs/${encodeURIComponent(e.image)}`;
-  li.querySelector(".ev-kind").textContent = k.label + (e.alert && e.kind !== "snapshot" && e.kind !== "answer" ? ", alert sent" : "");
-  li.querySelector(".ev-desc").textContent = e.description || e.reason || "No description";
-  li.onclick = () => openEvent(e);
-  li.onkeydown = ev => { if (ev.key === "Enter") openEvent(e); };
-  return li;
-}
 function openEvent(e) {
-  const k = KIND[e.kind] || KIND.motion;
+  const k = KIND[e.kind] || KIND.snapshot;
   $("dlg-img").hidden = !e.image;
   if (e.image) $("dlg-img").src = `/photos/${encodeURIComponent(e.image)}`;
   $("dlg-kind").textContent = k.label; $("dlg-kind").style.color = k.color;
   $("dlg-time").textContent = `${fmtDay(e.time)}, ${fmtTime(e.time)}`;
-  $("dlg-desc").textContent = e.description || "No description";
-  const conf = e.labels && e.labels.person ? `Person detector ${Math.round(e.labels.person * 100)}% sure.` : "";
-  $("dlg-meta").textContent = [e.reason, conf].filter(Boolean).join(". ");
+  $("dlg-desc").textContent = e.description || "";
+  $("dlg-advice").textContent = e.advice || "";
+  $("dlg-advice").hidden = !e.advice;
+  const temp = e.temp_f != null ? `${e.temp_f}°F · ${e.humidity ?? "?"}%` : "";
+  $("dlg-meta").textContent = [temp, e.notes ? `Note: ${e.notes}` : ""].filter(Boolean).join(" · ");
   $("dlg").showModal();
 }
+
 async function loadEvents() {
   const events = await api(`/api/events?filter=${filter}${day ? `&day=${day}` : ""}`);
   const tl = $("timeline"); tl.innerHTML = "";
+  $("btn-more").hidden = events.length <= shown;
   if (!events.length) {
-    tl.innerHTML = `<p class="empty">${filter === "all" ? "Nothing recorded" : "Nothing matches this filter"}${day ? " on this day" : " yet"}. Events appear here when the camera sees motion while you're away.</p>`;
+    tl.innerHTML = `<li class="muted" style="padding:12px 0">No events yet.</li>`;
     return;
   }
-  const todayLabel = fmtDay(new Date().toISOString());
-  let current = null, rail = null;
   for (const e of events.slice(0, shown)) {
-    const d = fmtDay(e.time);
-    if (d !== current) {
-      current = d;
-      const sec = document.createElement("div"); sec.className = "day";
-      const h = document.createElement("h3"); h.textContent = d === todayLabel ? `Today, ${d}` : d;
-      rail = document.createElement("ul"); rail.className = "rail";
-      sec.append(h, rail); tl.appendChild(sec);
-    }
-    rail.appendChild(evRow(e));
-  }
-  if (events.length > shown) {
-    const more = document.createElement("button"); more.className = "btn more";
-    more.textContent = `Show ${Math.min(20, events.length - shown)} more`;
-    more.onclick = () => { shown += 20; loadEvents(); };
-    tl.appendChild(more);
+    const k = KIND[e.kind] || KIND.snapshot;
+    const li = document.createElement("li"); li.className = "ev"; li.tabIndex = 0; li.style.setProperty("--k", k.color);
+    li.innerHTML = `<span class="ev-time"></span>` +
+      (e.image ? `<img class="ev-photo" loading="lazy" alt="">` : `<span class="ev-photo none">–</span>`) +
+      `<div style="min-width:0"><div class="ev-top"><i class="ev-dot"></i><span></span></div><p class="ev-desc"></p></div>`;
+    li.querySelector(".ev-time").textContent = `${fmtDay(e.time)} ${fmtTime(e.time)}`;
+    if (e.image) li.querySelector("img").src = `/thumbs/${encodeURIComponent(e.image)}`;
+    li.querySelector(".ev-top span").textContent = k.label + (e.temp_f != null ? ` · ${e.temp_f}°F` : "");
+    li.querySelector(".ev-desc").textContent = e.advice || e.description || e.reason || "";
+    li.onclick = () => openEvent(e);
+    li.onkeydown = ev => { if (ev.key === "Enter") openEvent(e); };
+    tl.appendChild(li);
   }
 }
 
-// Temperature chart with low/high guides
 async function loadTemp() {
   const pts = (await api(`/api/temperature?hours=${tempHours}`)).sort((a, b) => a.t - b.t);
   const svg = $("t-chart");
   if (pts.length < 2) {
-    svg.innerHTML = `<text x="200" y="60" text-anchor="middle" font-size="13" fill="var(--muted)">The chart fills in as readings are logged (every 10 minutes)</text>`;
-    $("t-min").textContent = $("t-max").textContent = $("t-avg").textContent = "–"; return;
+    svg.innerHTML = "";
+    $("t-range").textContent = "Waiting for logged readings";
+    return;
   }
   const fs = pts.map(p => cToF(p.c)), lo = Math.min(...fs), hi = Math.max(...fs), pad = Math.max((hi - lo) * 0.15, 0.5);
   const y0 = lo - pad, y1 = hi + pad, t0 = pts[0].t, dt = Math.max(pts.at(-1).t - t0, 1);
-  const X = t => (t - t0) / dt * 400, Y = f => 102 - (f - y0) / (y1 - y0) * 94;
+  const X = t => (t - t0) / dt * 400, Y = f => 70 - (f - y0) / (y1 - y0) * 62;
   const line = pts.map((p, i) => `${X(p.t).toFixed(1)},${Y(fs[i]).toFixed(1)}`).join(" ");
+  const avg = (fs.reduce((a, b) => a + b, 0) / fs.length).toFixed(1);
   svg.innerHTML =
-    `<line x1="0" x2="400" y1="${Y(hi)}" y2="${Y(hi)}" stroke="var(--line)" stroke-dasharray="3 4" vector-effect="non-scaling-stroke"/>` +
-    `<line x1="0" x2="400" y1="${Y(lo)}" y2="${Y(lo)}" stroke="var(--line)" stroke-dasharray="3 4" vector-effect="non-scaling-stroke"/>` +
-    `<polygon points="0,110 ${line} 400,110" fill="var(--ember)" opacity=".12"/>` +
-    `<polyline points="${line}" fill="none" stroke="var(--ember)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>`;
-  const avg = fs.reduce((a, b) => a + b, 0) / fs.length, hs = pts.map(p => p.h);
-  $("t-from").textContent = new Date(t0 * 1000).toLocaleString([], tempHours === 24 ? {hour: "numeric", minute: "2-digit"} : {weekday: "short", hour: "numeric"});
-  $("t-min").textContent = `${lo}°F`; $("t-max").textContent = `${hi}°F`;
-  $("t-avg").textContent = `${avg.toFixed(1)}°F`;
-  svg.setAttribute("aria-label", `Room temperature over the last ${tempHours === 24 ? "24 hours" : "7 days"}: ${lo} to ${hi}°F, humidity ${Math.min(...hs)} to ${Math.max(...hs)}%`);
+    `<polygon points="0,76 ${line} 400,76" fill="var(--amber)" opacity=".10"/>` +
+    `<polyline points="${line}" fill="none" stroke="var(--amber)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>`;
+  $("t-range").textContent = `Low ${lo}°F · Avg ${avg}°F · High ${hi}°F`;
 }
 
 async function refresh() {
   try { renderStatus(await api("/api/status")); await loadEvents(); await loadTemp(); } catch (e) { console.warn(e); }
 }
 
-// Ask Guardian
 function bubble(cls, text) {
   const el = document.createElement("div"); el.className = `msg ${cls}`; el.textContent = text;
   $("chat").appendChild(el); $("chat").scrollTop = $("chat").scrollHeight; return el;
 }
-function stepsList(calls) {
-  const ul = document.createElement("ul"); ul.className = "steps";
-  for (const c of calls) {
-    const kind = {done: "done", confirmed: "done", approved: "done", dry_run: "test", needs_confirmation: "wait"}[c.status] || "no";
-    const mark = {done: "✓", test: "✓", wait: "?", no: "✕"}[kind];
-    const what = (TOOL[c.tool] || (() => `Asked for "${c.tool}"`))(c.args || {});
-    const li = document.createElement("li"); li.className = kind;
-    li.innerHTML = `<span class="mark"></span><span><span class="what"></span> <span class="why"></span></span>`;
-    li.querySelector(".mark").textContent = mark;
-    li.querySelector(".what").textContent = kind === "wait" ? `Waiting for your OK: ${what.charAt(0).toLowerCase() + what.slice(1)}` : what;
-    li.querySelector(".why").textContent = c.status === "refused" ? `(not allowed: ${c.reason})`
-      : c.status === "cancelled" ? "(cancelled)" : c.status === "failed" ? `(failed: ${c.reason})`
-      : c.status === "dry_run" ? "(test mode)" : "";
-    ul.appendChild(li);
-  }
-  return ul;
-}
+
 async function ask(question) {
   question = question.trim();
   if (!question || $("ask-btn").disabled) return;
   $("ask-q").value = ""; $("ask-btn").disabled = true;
   bubble("q", question);
-  const el = bubble("a thinking", "Thinking…"), started = Date.now();
-  const timer = setInterval(() => { el.textContent = `Thinking… ${Math.round((Date.now() - started) / 1000)} s`; }, 1000);
+  const el = bubble("a thinking", "Thinking…");
   try {
     const r = await fetch("/api/ask", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({question})});
-    const data = await r.json().catch(() => ({error: `The Pi answered with error ${r.status}.`}));
+    const data = await r.json().catch(() => ({error: `Error ${r.status}`}));
     el.className = "msg a";
-    if (!r.ok || data.error) { el.classList.add("err"); el.textContent = data.error || `The Pi answered with error ${r.status}.`; return; }
+    if (!r.ok || data.error) { el.classList.add("err"); el.textContent = data.error || `Error ${r.status}`; return; }
     el.textContent = data.answer;
     if (data.image) {
-      const img = document.createElement("img"); img.className = "shot"; img.alt = "What the camera saw";
+      const img = document.createElement("img"); img.className = "shot"; img.alt = "Camera";
       img.onload = () => { $("chat").scrollTop = $("chat").scrollHeight; };
       img.src = `/photos/${encodeURIComponent(data.image)}`;
-      img.onclick = () => openEvent({kind: "answer", time: new Date().toISOString(), image: data.image, description: data.answer, reason: question});
+      img.onclick = () => openEvent({kind: "answer", time: new Date().toISOString(), image: data.image, description: data.answer});
       el.appendChild(img);
     }
-    if (data.events && data.events.length) {
-      const rel = document.createElement("div"); rel.className = "rel";
-      for (const e of data.events) {
-        const b = document.createElement("button"); b.type = "button";
-        b.style.setProperty("--k", (KIND[e.kind] || KIND.motion).color);
-        b.title = `${fmtDay(e.time)}, ${fmtTime(e.time)}: ${e.description || e.reason}`;
-        b.innerHTML = e.image ? `<img alt="">` : `<span class="noimg"></span>`;
-        if (e.image) b.querySelector("img").src = `/thumbs/${encodeURIComponent(e.image)}`;
-        else b.querySelector(".noimg").textContent = fmtTime(e.time);
-        b.onclick = () => openEvent(e);
-        rel.appendChild(b);
-      }
-      el.appendChild(rel);
-    }
-    if (data.tool_calls && data.tool_calls.length) el.appendChild(stepsList(data.tool_calls));
     if (data.pending) {
       const row = document.createElement("div"); row.className = "confirm";
-      for (const [label, reply, cls] of [["Yes, go ahead", "yes", "btn primary"], ["Cancel", "no", "btn"]]) {
+      for (const [label, reply, cls] of [["Confirm", "yes", "btn primary sm"], ["Cancel", "no", "btn sm"]]) {
         const b = document.createElement("button"); b.type = "button"; b.textContent = label; b.className = cls;
         b.onclick = () => { row.remove(); ask(reply); };
         row.appendChild(b);
       }
       el.appendChild(row);
     }
-    const meta = document.createElement("div"); meta.className = "meta";
-    const engine = data.engine === "tools" ? `${data.model} chose the tools`
-      : data.engine === "rules" ? `Answered by the keyword rules${data.fallback_reason ? ` (${data.fallback_reason})` : ""}`
-      : data.image ? "Answered by Moondream" : "Answered from the log";
-    meta.textContent = `${data.period ? data.period.charAt(0).toUpperCase() + data.period.slice(1) + ". " : ""}${engine}, in ${data.seconds} s.`;
-    el.appendChild(meta);
-    if ((data.tool_calls || []).some(c => ["done", "confirmed"].includes(c.status) && /set_mode|snooze|buzzer/.test(c.tool))) refresh();
+    if ((data.tool_calls || []).some(c => ["done", "confirmed"].includes(c.status))) refresh();
   } catch (err) {
-    el.className = "msg a err"; el.textContent = "Couldn't reach the Pi. Check that Tailscale is on.";
+    el.className = "msg a err"; el.textContent = "Couldn't reach the Pi.";
   } finally {
-    clearInterval(timer); $("ask-btn").disabled = false; $("chat").scrollTop = $("chat").scrollHeight;
+    $("ask-btn").disabled = false; $("chat").scrollTop = $("chat").scrollHeight;
   }
 }
+
 $("ask-form").onsubmit = ev => { ev.preventDefault(); ask($("ask-q").value); };
 document.querySelectorAll(".sug").forEach(b => b.onclick = () => ask(b.textContent));
-
-// Controls
-$("btn-away").onclick = async () => { renderStatus(await api("/api/mode", {mode: "away"})); toast("Armed. Motion alerts are on."); };
-$("btn-home").onclick = async () => { renderStatus(await api("/api/mode", {mode: "home"})); toast("Disarmed. A summary is on its way to your phone."); };
-$("btn-snap").onclick = async () => { await api("/api/snapshot", {}); toast("Snapshot taken. The description will follow."); setTimeout(refresh, 4000); };
+$("btn-picked").onclick = async () => { renderStatus(await api("/api/picked_up", {})); await loadEvents(); toast("Marked picked up"); };
+$("btn-snap").onclick = async () => { await api("/api/snapshot", {}); toast("Snapshot queued"); setTimeout(refresh, 3500); };
 $("snooze").onchange = async ev => {
   if (ev.target.value === "") return;
   const m = Number(ev.target.value);
   renderStatus(await api("/api/snooze", {minutes: m}));
-  toast(m ? `Alerts snoozed for ${m >= 60 ? m / 60 + (m === 60 ? " hour" : " hours") : m + " minutes"}.` : "Alerts resumed.");
+  toast(m ? `Snoozed ${m}m` : "Alerts resumed");
   ev.target.value = "";
 };
 document.querySelectorAll("[data-buzz]").forEach(btn => btn.onclick = async () => {
   try {
     const d = await api("/api/buzzer", {action: btn.dataset.buzz});
     if (d.error) return toast(d.error);
-    renderStatus(d); toast(btn.dataset.buzz === "off" ? "Buzzer stopped." : `Buzzer: ${btn.textContent.toLowerCase()}.`);
-  } catch (e) { toast("The buzzer isn't available."); }
+    renderStatus(d); toast(btn.dataset.buzz === "off" ? "Buzzer off" : `Buzzer: ${btn.dataset.buzz}`);
+  } catch (e) { toast("Buzzer unavailable"); }
 });
-// Buzzer volume: set it over MQTT when the slider is released, then play a short beep to preview
 $("buzz-vol").oninput = e => { volDragging = true; $("buzz-vol-val").textContent = `${e.target.value}%`; };
 $("buzz-vol").onchange = async e => {
   try {
-    const d = await api("/api/buzzer", {action: "volume", volume: Number(e.target.value)});
-    if (d.error) { volDragging = false; return toast(d.error); }
+    await api("/api/buzzer", {action: "volume", volume: Number(e.target.value)});
     await api("/api/buzzer", {action: "beep"});
-    toast(`Buzzer volume set to ${e.target.value}%.`);
-  } catch (err) { toast("The buzzer isn't available."); }
+    toast(`Volume ${e.target.value}%`);
+  } catch (err) { toast("Buzzer unavailable"); }
   volDragging = false;
 };
-document.querySelectorAll(".chip").forEach(c => c.onclick = () => {
-  document.querySelectorAll(".chip").forEach(x => x.classList.toggle("on", x === c));
-  filter = c.dataset.f; shown = 20; loadEvents();
+document.querySelectorAll(".flt").forEach(c => c.onclick = () => {
+  document.querySelectorAll(".flt").forEach(x => x.classList.toggle("on", x === c));
+  filter = c.dataset.f; shown = 15; loadEvents();
 });
-$("day").onchange = e => { day = e.target.value; shown = 20; loadEvents(); };
-$("btn-today").onclick = () => { day = new Date().toLocaleDateString("en-CA"); $("day").value = day; shown = 20; loadEvents(); };
-$("btn-alldays").onclick = () => { day = ""; $("day").value = ""; shown = 20; loadEvents(); };
+$("day").onchange = e => { day = e.target.value; shown = 15; loadEvents(); };
+$("btn-more").onclick = () => { shown += 15; loadEvents(); };
 document.querySelectorAll("[data-h]").forEach(b => b.onclick = () => {
   document.querySelectorAll("[data-h]").forEach(x => x.classList.toggle("on", x === b));
   tempHours = Number(b.dataset.h); loadTemp();
 });
-
-// Live view
 function setLive(on) {
   clearInterval(liveTimer); liveTimer = null;
-  $("live-img").hidden = !on; $("live-tag").hidden = !on; $("live-off").hidden = on;
-  $("btn-live").textContent = on ? "Stop live view" : "Start live view";
+  $("live-img").hidden = !on; $("live-off").hidden = on;
+  $("btn-live").textContent = on ? "Pause live" : "Start live";
   if (on) {
     const tick = () => { $("live-img").src = `/api/live.jpg?t=${Date.now()}`; };
     tick(); liveTimer = setInterval(tick, 1000);

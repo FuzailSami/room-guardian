@@ -13,7 +13,7 @@ Some modules are "low-level trigger": they sound when the pin is LOW (active_low
 
 Test which settings make yours sound:
   python3 actuators.py            # tries active, active-low, passive, passive-low (2 s pause each)
-  python3 actuators.py alarm      # plays a pattern with the settings in room_guardian.py
+  python3 actuators.py alarm      # plays a pattern with the settings in package_watcher.py
   python3 actuators.py volume     # beeps at 100%, 60%, 40%, 25%, 15% to pick BUZZER_VOLUME
   python3 actuators.py tones      # passive buzzer: beeps at 1000-5000 Hz to find its loudest tone
 
@@ -129,9 +129,9 @@ class Buzzer:
 
 if __name__ == "__main__":
     gpio = 27
-    if len(sys.argv) > 1:  # use the guardian's settings
+    if len(sys.argv) > 1:  # use the watcher's settings
         sys.path.insert(0, ".")
-        from room_guardian import BUZZER_ACTIVE_LOW, BUZZER_GPIO, BUZZER_PASSIVE, BUZZER_TONE_HZ, BUZZER_VOLUME
+        from package_watcher import BUZZER_ACTIVE_LOW, BUZZER_GPIO, BUZZER_PASSIVE, BUZZER_TONE_HZ, BUZZER_VOLUME
 
         if sys.argv[1] == "tones":
             for hz in range(1000, 5001, 500):

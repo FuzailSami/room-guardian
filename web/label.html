@@ -3,18 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Label Photos</title>
+<title>Label Package Photos</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
     --bg: #EDF0F3; --panel: #FFFFFF; --panel-2: #F5F7F9; --line: #D7DDE3;
-    --text: #1E2832; --muted: #5B6876; --accent: #3D6FD6; --person: #D2453C; --none: #2E9C6A; --unclear: #D6962A;
+    --text: #1E2832; --muted: #5B6876; --accent: #3D6FD6; --package: #DD7333; --none: #2E9C6A; --unclear: #D6962A;
   }
   @media (prefers-color-scheme: dark) {
     :root { --bg: #131A21; --panel: #1A232C; --panel-2: #212C36; --line: #2C3843; --text: #E4E9EE; --muted: #9AA7B4;
-            --accent: #6C93EA; --person: #E7665D; --none: #43B784; --unclear: #E2AA45; }
+            --accent: #6C93EA; --package: #EE8C4E; --none: #43B784; --unclear: #E2AA45; }
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
@@ -27,7 +27,6 @@
   .spacer { flex: 1; }
   .counts { display: flex; gap: 8px; flex-wrap: wrap; }
   .count { background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; font-size: 13px; }
-  .count b { font-variant-numeric: tabular-nums; }
   .progress { height: 6px; background: var(--panel-2); border-radius: 99px; overflow: hidden; }
   .progress div { height: 100%; background: var(--accent); width: 0; transition: width .2s ease; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
@@ -41,21 +40,20 @@
                    border-radius: 12px; padding: 12px; cursor: pointer; }
   .buttons button { font-weight: 700; font-size: 16px; }
   .buttons button kbd { display: block; font: 12px ui-monospace, monospace; color: var(--muted); margin-top: 2px; }
-  .b-person { border-color: var(--person); }  .b-person:hover, .b-person.on { background: var(--person); color: #fff; }
-  .b-none { border-color: var(--none); }      .b-none:hover, .b-none.on { background: var(--none); color: #fff; }
+  .b-package { border-color: var(--package); } .b-package:hover, .b-package.on { background: var(--package); color: #fff; }
+  .b-none { border-color: var(--none); }       .b-none:hover, .b-none.on { background: var(--none); color: #fff; }
   .b-unclear { border-color: var(--unclear); } .b-unclear:hover, .b-unclear.on { background: var(--unclear); color: #fff; }
   .buttons button:hover kbd, .buttons button.on kbd { color: inherit; opacity: .8; }
   .nav { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .hint { color: var(--muted); font-size: 13px; }
   .done { text-align: center; padding: 40px 16px; }
-  .done h2 { margin: 0 0 6px; }
   code { background: var(--panel-2); padding: 2px 6px; border-radius: 6px; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="bar">
-    <h1>Label photos</h1>
+    <h1>Label package photos</h1>
     <a href="/">← Dashboard</a>
     <div class="spacer"></div>
     <select id="show" aria-label="Which photos">
@@ -66,8 +64,8 @@
   <div class="counts">
     <span class="count"><b id="c-done">0</b> labeled</span>
     <span class="count"><b id="c-left">0</b> left</span>
-    <span class="count">person <b id="c-person">0</b></span>
-    <span class="count">no person <b id="c-none">0</b></span>
+    <span class="count">package <b id="c-package">0</b></span>
+    <span class="count">no package <b id="c-none">0</b></span>
     <span class="count">unclear <b id="c-unclear">0</b></span>
   </div>
   <div class="progress"><div id="bar"></div></div>
@@ -78,20 +76,19 @@
       <div class="info"><span id="when"></span><span id="pos"></span></div>
     </div>
     <div class="buttons" style="margin-top:14px">
-      <button class="b-person" data-v="person">Person<kbd>P</kbd></button>
-      <button class="b-none" data-v="none">No person<kbd>N</kbd></button>
+      <button class="b-package" data-v="package">Package<kbd>P</kbd></button>
+      <button class="b-none" data-v="none">No package<kbd>N</kbd></button>
       <button class="b-unclear" data-v="unclear">Unclear<kbd>U</kbd></button>
     </div>
     <div class="nav" style="margin-top:12px">
       <button id="prev">← Back</button><button id="next">Skip →</button>
-      <span class="hint">Is a person (or part of one) visible? The AI's answer is hidden so it can't bias you.</span>
+      <span class="hint">Is a box or delivery package visible? The AI's answer is hidden so it can't bias you.</span>
     </div>
   </div>
 
   <div class="card done" id="done" hidden>
-    <h2 id="done-h">All photos labeled</h2>
-    <p class="hint">Run <code>python3 evaluate.py</code> on the Pi to get the accuracy and speed report.
-      More labeled photos (aim for 100+, with at least 20 people) give more trustworthy numbers.</p>
+    <h2>All photos labeled</h2>
+    <p class="hint">Run <code>python3 evaluate.py</code> on the Pi to measure Moondream package detection accuracy and speed.</p>
   </div>
 </div>
 
@@ -117,7 +114,7 @@ function counts() {
   const vals = Object.entries(labels).filter(([id]) => ids.has(id)).map(([, v]) => v);
   const n = v => vals.filter(x => x === v).length;
   $("c-done").textContent = vals.length; $("c-left").textContent = events.length - vals.length;
-  $("c-person").textContent = n("person"); $("c-none").textContent = n("none"); $("c-unclear").textContent = n("unclear");
+  $("c-package").textContent = n("package"); $("c-none").textContent = n("none"); $("c-unclear").textContent = n("unclear");
   $("bar").style.width = events.length ? `${vals.length / events.length * 100}%` : "0";
 }
 
@@ -130,9 +127,9 @@ function show() {
   $("when").textContent = new Date(e.time).toLocaleString([], {weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit"});
   $("pos").textContent = `${i + 1} / ${order.length}`;
   $("current").hidden = !v;
-  if (v) { $("current").textContent = v === "none" ? "no person" : v; $("current").style.background = `var(--${v})`; }
+  if (v) { $("current").textContent = v === "none" ? "no package" : v; $("current").style.background = `var(--${v})`; }
   document.querySelectorAll("[data-v]").forEach(b => b.classList.toggle("on", b.dataset.v === v));
-  const next = events[order[i + 1]];  // preload the next photo
+  const next = events[order[i + 1]];
   if (next) new Image().src = `/photos/${encodeURIComponent(next.image)}`;
 }
 
@@ -149,7 +146,7 @@ $("next").onclick = () => { if (i < order.length - 1) { i++; show(); } };
 $("show").onchange = () => { buildOrder(); show(); };
 document.addEventListener("keydown", ev => {
   const k = ev.key.toLowerCase();
-  if (k === "p") label("person"); else if (k === "n") label("none"); else if (k === "u") label("unclear");
+  if (k === "p") label("package"); else if (k === "n") label("none"); else if (k === "u") label("unclear");
   else if (k === "arrowleft") $("prev").click(); else if (k === "arrowright") $("next").click();
 });
 

@@ -161,28 +161,28 @@ class AgentState(TypedDict, total=False):
 
 class ToolAgent:
     def __init__(self, tools, context, compose, server="http://localhost:11434", model="llama3.2:1b",
-                 num_thread=2, log_path=None, command_pattern=None, timeout=180):
+                 num_thread=2, log_path=None, command_pattern=None, routing="", app_name="Package Watcher",
+                 timeout=180):
         self.tools = {t.name: t for t in tools}
         self.context = context  # () -> dict of live device state for the system prompt
         self.compose = compose  # (question, facts, summary, plain) -> answer text from the facts only
         self.server, self.model, self.num_thread, self.timeout = server, model, num_thread, timeout
         self.log_path = log_path
         self.command_pattern = command_pattern
+        self.routing = routing
+        self.app_name = app_name
         self.sessions = Sessions()
         self.graph = self._build()
 
     # --- model call ---
     def system_prompt(self):
         actions = ", ".join(t.name for t in self.tools.values() if t.action)
+        routing = self.routing or f"Call the tool(s) needed to answer the user or run allowed actions ({actions})."
         return (
-            "You are the assistant for Room Guardian, a home security camera on a Raspberry Pi.\n"
+            f"You are the assistant for {self.app_name}, a smart package monitor on a Raspberry Pi.\n"
             f"Current state: {json.dumps(self.context(), default=str)}\n"
-            "Call the tool(s) needed to answer the user or to do what they ask:\n"
-            "- past activity, people, events, summaries -> get_events\n"
-            "- temperature or humidity -> get_temperature\n"
-            "- mode, snooze, buzzer or system status -> get_status\n"
-            "- what is in the room right now -> look_at_room\n"
-            f"- Only call an action ({actions}) when the user clearly asks for it.\n"
+            f"{routing}\n"
+            f"Only call an action ({actions}) when the user clearly asks for it.\n"
             "If no tool fits, answer in one short sentence without calling a tool."
         )
 

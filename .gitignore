@@ -1,4 +1,5 @@
 # Runtime data (photos, event log, private ntfy topic names)
+package-watcher/
 guardian/
 config.json
 events.json
