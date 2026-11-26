@@ -29,9 +29,10 @@ import requests
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CASES_PATH = os.path.join(HERE, "eval", "agent_cases.json")
-CONFIG_PATH = os.path.expanduser("~/guardian/config.json")
+CONFIG_PATH = os.path.expanduser("~/package-watcher/config.json")
+LEGACY_CONFIG_PATH = os.path.expanduser("~/guardian/config.json")
 ACTION_DONE = ("dry_run", "done", "confirmed")
-ANY_ACTION = {"sound_buzzer", "set_mode", "snooze_alerts", "take_snapshot"}
+ANY_ACTION = {"sound_buzzer", "snooze_alerts", "take_snapshot", "mark_picked_up"}
 
 
 def default_url():
@@ -47,7 +48,7 @@ def ask(url, key, question, session, model):
     if model:
         body["model"] = model
     for _ in range(60):  # wait if the dashboard is busy answering something
-        r = requests.post(f"{url}/api/ask", json=body, cookies={"rg_key": key}, timeout=600)
+        r = requests.post(f"{url}/api/ask", json=body, cookies={"pw_key": key}, timeout=600)
         if r.status_code != 429:
             r.raise_for_status()
             return r.json()
@@ -103,7 +104,8 @@ def main():
     ap.add_argument("--only", help="run only cases whose id or category contains this text")
     args = ap.parse_args()
 
-    with open(CONFIG_PATH) as f:
+    cfg_path = CONFIG_PATH if os.path.exists(CONFIG_PATH) else LEGACY_CONFIG_PATH
+    with open(cfg_path) as f:
         key = json.load(f)["web_key"]
     with open(CASES_PATH) as f:
         cases = json.load(f)

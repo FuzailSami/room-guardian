@@ -1,5 +1,5 @@
 [Unit]
-Description=Room Guardian (LangGraph camera agent)
+Description=Package Watcher (LangGraph camera & temperature agent)
 After=network-online.target ollama.service
 Wants=network-online.target ollama.service
 
@@ -8,7 +8,7 @@ User=fuzail
 WorkingDirectory=/home/fuzail/room-guardian
 Environment=PYTHONUNBUFFERED=1
 Environment=LIBCAMERA_LOG_LEVELS=*:ERROR
-ExecStart=/usr/bin/python3 /home/fuzail/room-guardian/room_guardian.py
+ExecStart=/usr/bin/python3 /home/fuzail/room-guardian/package_watcher.py
 Restart=on-failure
 RestartSec=10
 
